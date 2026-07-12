@@ -1,8 +1,9 @@
 # libcreep
 
-`libcreep` is a TypeScript browser-fingerprinting library based on the Creep.js
-detection suite. It runs entirely in the browser and includes no server-side
-collection.
+[![CI](https://github.com/NetworkCats/libcreep/actions/workflows/compatibility.yml/badge.svg)](https://github.com/NetworkCats/libcreep/actions/workflows/compatibility.yml)
+
+`libcreep` is a TypeScript browser fingerprinting library based on the Creep.js
+detection suite. 
 
 ## Why
 
@@ -15,10 +16,6 @@ everyone to use in real world projects.
 ```sh
 npm install libcreep
 ```
-
-`libcreep` supports Node.js 22.12 and newer. Its published declarations support
-TypeScript 5.9 and newer. The runtime code runs in the browser; importing it in
-Node.js is safe, but fingerprint collection requires a browser window.
 
 ## Usage
 
@@ -58,5 +55,7 @@ const result = await agent.get({ includeWebRTC: true });
 
 ## License
 
-MIT. See [LICENSE](./LICENSE) and [NOTICE](./NOTICE). `libcreep` is an
+MIT. 
+
+See [LICENSE](./LICENSE) and [NOTICE](./NOTICE). `libcreep` is an
 independent adaptation and is not an official CreepJS release.
