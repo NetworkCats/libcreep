@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   validate:
-    name: Latest Node.js and TypeScript
+    name: Validation
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,8 +18,32 @@ jobs:
           node-version: 26
           cache: npm
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
-      - run: npm run validate
+      - run: npm run format:check
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm run test:unit
+      - run: npm run test:node-compat
+      - run: npm run test:types:consumer
+      - run: npx publint
+      - run: npx attw --pack --profile esm-only
+
+  browser:
+    name: Browser / ${{ matrix.browser }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps ${{ matrix.browser }}
+      - run: npm run test:browser -- --browser.name=${{ matrix.browser }}
 
   node:
     name: Node.js ${{ matrix.node }}
