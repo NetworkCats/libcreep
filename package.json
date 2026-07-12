@@ -29,6 +29,7 @@
     "test": "npm run test:unit && npm run test:browser",
     "test:unit": "vitest run --project unit",
     "test:browser": "npm run build && vitest run --project browser",
+    "test:coverage": "npm run build && vitest run --coverage",
     "typecheck": "tsc -p tsconfig.json",
     "validate": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run build && publint && attw --pack"
   },
@@ -48,6 +49,7 @@
     "@arethetypeswrong/cli": "0.18.5",
     "@types/node": "26.1.1",
     "@vitest/browser-playwright": "4.1.10",
+    "@vitest/coverage-istanbul": "4.1.10",
     "oxlint": "1.73.0",
     "playwright": "1.61.1",
     "prettier": "3.9.5",

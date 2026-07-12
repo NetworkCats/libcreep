@@ -11,6 +11,17 @@ export default defineConfig({
     __LIBCREEP_PACKAGE_VERSION__: JSON.stringify(packageJson.version),
   },
   test: {
+    coverage: {
+      include: ['src/**/*.ts'],
+      provider: 'istanbul',
+      reporter: ['text', 'html', 'json-summary'],
+      thresholds: {
+        branches: 62,
+        functions: 84,
+        lines: 80,
+        statements: 78,
+      },
+    },
     projects: [
       {
         define: {
@@ -31,6 +42,7 @@ export default defineConfig({
         test: {
           name: 'browser',
           include: ['test/**/*.browser.test.ts'],
+          fileParallelism: false,
           browser: {
             enabled: true,
             headless: true,
