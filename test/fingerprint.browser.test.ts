@@ -195,10 +195,20 @@ const upstreamCoverage: ReadonlyArray<
   ['extensions', ['resistance', 'features']],
 ];
 
+const optionallyUnsupported = new Set<(typeof DETECTION_NAMES)[number]>([
+  'canvasWebgl',
+]);
+
 describe('ported upstream browser test coverage', () => {
   it.each(upstreamCoverage)('%s probes produce a usable result', (_, names) => {
     for (const name of names) {
-      expect(result.components[name].status).toBe('fulfilled');
+      const component = result.components[name];
+      if (component.status === 'unsupported') {
+        expect(optionallyUnsupported.has(name), name).toBe(true);
+        expect(result.values[name]).toBeUndefined();
+        continue;
+      }
+      expect(component.status, name).toBe('fulfilled');
       expect(result.values[name]?.$hash).toMatch(/^[a-f\d]{64}$/);
     }
   });

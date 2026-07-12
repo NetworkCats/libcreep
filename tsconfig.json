@@ -25,5 +25,5 @@
     "vitest.config.ts",
     "vitest.speed.config.ts"
   ],
-  "exclude": ["src/internal"]
+  "exclude": ["src/internal", "test/compatibility"]
 }
