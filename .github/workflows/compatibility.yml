@@ -25,8 +25,8 @@ jobs:
       - run: npm run test:unit
       - run: npm run test:node-compat
       - run: npm run test:types:consumer
-      - run: npx publint
-      - run: npx attw --pack --profile esm-only
+      - run: npm exec -c 'publint'
+      - run: npm exec -c 'attw --pack --profile esm-only'
 
   browser:
     name: Browser / ${{ matrix.browser }}
@@ -42,7 +42,7 @@ jobs:
           node-version: 26
           cache: npm
       - run: npm ci
-      - run: npx playwright install --with-deps ${{ matrix.browser }}
+      - run: npm exec -c 'playwright install --with-deps ${{ matrix.browser }}'
       - run: npm run test:browser -- --browser.name=${{ matrix.browser }}
 
   node:
@@ -78,4 +78,4 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - run: npx --yes --package typescript@${{ matrix.typescript }} tsc -p test/compatibility/tsconfig.json
+      - run: npm exec --yes --package=typescript@${{ matrix.typescript }} -c 'tsc -p test/compatibility/tsconfig.json'
