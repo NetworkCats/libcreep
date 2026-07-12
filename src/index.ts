@@ -141,7 +141,9 @@ export function getBrowserSupport(): BrowserSupport {
   return {
     browserEnvironment,
     secureContext: browserEnvironment && window.isSecureContext === true,
-    webCrypto: typeof crypto !== 'undefined' && crypto.subtle !== undefined,
+    webCrypto:
+      typeof crypto !== 'undefined' &&
+      typeof crypto.subtle?.digest === 'function',
     workers: browserEnvironment && typeof Worker !== 'undefined',
   };
 }

@@ -131,37 +131,35 @@ const constructDescriptions = ({mediaType, sdp, sdpDescriptors, rtxCounter}) => 
 			return { ...acc, sdpFmtpLine: [...rawData.split(';')] }
 		}, {})
 
-		let shouldMerge = false
+		let didMerge = false
 		const mergerAcc = descriptionAcc.map((x) => {
-			shouldMerge = x.mimeType == description.mimeType
-			if (shouldMerge) {
-				if (x.feedbackSupport) {
-					x.feedbackSupport = [
-						...new Set([...x.feedbackSupport, ...description.feedbackSupport]),
-					]
-				}
-				if (x.sdpFmtpLine) {
-					x.sdpFmtpLine = [
-						...new Set([...x.sdpFmtpLine, ...description.sdpFmtpLine]),
-					]
-				}
-				return {
-					...x,
-					clockRates: [
-						...new Set([...x.clockRates, ...description.clockRates]),
-					],
-				}
+			if (x.mimeType != description.mimeType) return x
+			didMerge = true
+			const feedbackSupport = [...new Set([
+				...(x.feedbackSupport || []),
+				...(description.feedbackSupport || []),
+			])]
+			const sdpFmtpLine = [...new Set([
+				...(x.sdpFmtpLine || []),
+				...(description.sdpFmtpLine || []),
+			])]
+			return {
+				...x,
+				...(feedbackSupport.length ? { feedbackSupport } : {}),
+				...(sdpFmtpLine.length ? { sdpFmtpLine } : {}),
+				clockRates: [
+					...new Set([...(x.clockRates || []), ...(description.clockRates || [])]),
+				],
 			}
-			return x
 		})
-		if (shouldMerge) {
+		if (didMerge) {
 			return mergerAcc
 		}
 		return [...descriptionAcc, description]
 	}, [])
 }
 
-const getCapabilities = (sdp) => {
+export const getCapabilities = (sdp) => {
 	const videoDescriptors = ((/m=video [^\s]+ [^\s]+ ([^\n|\r]+)/.exec(sdp) || [])[1] || '').split(' ')
 	const audioDescriptors = ((/m=audio [^\s]+ [^\s]+ ([^\n|\r]+)/.exec(sdp) || [])[1] || '').split(' ')
 	const rtxCounter = createCounter()
@@ -258,6 +256,12 @@ export default async function getWebRTCData(signal?: AbortSignal): Promise<Recor
 		signal?.addEventListener('abort', abort, { once: true })
 		connection.addEventListener('icecandidate', computeCandidate)
 		connection.createDataChannel('')
+		giveUpOnIPAddress = setTimeout(() => finish(sdp ? {
+			codecsSdp,
+			extensions,
+			foundation,
+			iceCandidate,
+		} : null), 3000)
 		void (async () => {
 			try {
 				const offer = await connection.createOffer({
@@ -268,12 +272,6 @@ export default async function getWebRTCData(signal?: AbortSignal): Promise<Recor
 				extensions = getExtensions(sdp)
 				codecsSdp = getCapabilities(sdp)
 				await connection.setLocalDescription(offer)
-				giveUpOnIPAddress = setTimeout(() => finish(sdp ? {
-					codecsSdp,
-					extensions,
-					foundation,
-					iceCandidate,
-				} : null), 3000)
 			} catch (error) {
 				finish(undefined, error)
 			}

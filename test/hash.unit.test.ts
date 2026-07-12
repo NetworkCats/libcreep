@@ -86,6 +86,24 @@ describe('canonical component hashing', () => {
     );
   });
 
+  it('distinguishes negative zero from positive zero', async () => {
+    const negativeZero = {
+      sample: { duration: 1, status: 'fulfilled', value: -0 },
+    } as HashableComponents;
+    const positiveZero = {
+      sample: { duration: 1, status: 'fulfilled', value: 0 },
+    } as HashableComponents;
+
+    await expect(hashComponents(negativeZero)).resolves.toBe(
+      sha256Json({
+        sample: { value: { $type: 'number', value: '-0' } },
+      }),
+    );
+    await expect(hashComponents(negativeZero)).resolves.not.toBe(
+      await hashComponents(positiveZero),
+    );
+  });
+
   it('normalizes Error values with stable diagnostic fields', async () => {
     const error = new TypeError('bad component value');
     error.stack = 'fixture stack';
@@ -108,6 +126,14 @@ describe('canonical component hashing', () => {
 
   it('fails clearly when Web Crypto is unavailable', async () => {
     vi.stubGlobal('crypto', undefined);
+
+    await expect(hashComponents({})).rejects.toThrow(
+      'SHA-256 hashing requires the Web Crypto API.',
+    );
+  });
+
+  it('fails clearly when Web Crypto has no digest implementation', async () => {
+    vi.stubGlobal('crypto', { subtle: {} });
 
     await expect(hashComponents({})).rejects.toThrow(
       'SHA-256 hashing requires the Web Crypto API.',
@@ -148,6 +174,29 @@ describe('component diagnostics', () => {
         duration: 1,
         status: 'fulfilled',
         value: { $type: 'bigint', value: '42' },
+      },
+    });
+  });
+
+  it('preserves non-JSON numeric values in diagnostics', () => {
+    const components = {
+      sample: {
+        duration: 1,
+        status: 'fulfilled',
+        value: [-0, Number.NaN, Infinity, -Infinity],
+      },
+    } as HashableComponents;
+
+    expect(JSON.parse(componentsToDebugString(components))).toEqual({
+      sample: {
+        duration: 1,
+        status: 'fulfilled',
+        value: [
+          { $type: 'number', value: '-0' },
+          { $type: 'number', value: 'NaN' },
+          { $type: 'number', value: 'Infinity' },
+          { $type: 'number', value: '-Infinity' },
+        ],
       },
     });
   });

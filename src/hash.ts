@@ -28,8 +28,14 @@ function canonicalize(value: unknown): unknown {
   if (typeof value === 'bigint') {
     return { $type: 'bigint', value: value.toString() };
   }
-  if (typeof value === 'number' && !Number.isFinite(value)) {
-    return { $type: 'number', value: String(value) };
+  if (
+    typeof value === 'number' &&
+    (!Number.isFinite(value) || Object.is(value, -0))
+  ) {
+    return {
+      $type: 'number',
+      value: Object.is(value, -0) ? '-0' : String(value),
+    };
   }
   if (value instanceof Error) return normalizeError(value);
   if (Array.isArray(value)) return value.map(canonicalize);
@@ -62,7 +68,10 @@ function getHashPayload(components: HashableComponents): unknown {
 }
 
 async function sha256(value: unknown): Promise<string> {
-  if (typeof crypto === 'undefined' || crypto.subtle === undefined) {
+  if (
+    typeof crypto === 'undefined' ||
+    typeof crypto.subtle?.digest !== 'function'
+  ) {
     throw new TypeError('SHA-256 hashing requires the Web Crypto API.');
   }
   const json = JSON.stringify(canonicalize(value));
@@ -91,7 +100,13 @@ export function componentsToDebugString(
         ? normalizeError(value)
         : typeof value === 'bigint'
           ? { $type: 'bigint', value: value.toString() }
-          : value,
+          : typeof value === 'number' &&
+              (!Number.isFinite(value) || Object.is(value, -0))
+            ? {
+                $type: 'number',
+                value: Object.is(value, -0) ? '-0' : String(value),
+              }
+            : value,
     2,
   );
 }

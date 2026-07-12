@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import LibCreep, {
   ALGORITHM_VERSION,
@@ -14,6 +14,10 @@ import LibCreep, {
   VERSION,
 } from '../src/index.js';
 
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 describe('server-side import safety', () => {
   it('imports without touching browser globals', () => {
     expect(isBrowserEnvironment()).toBe(false);
@@ -26,6 +30,13 @@ describe('server-side import safety', () => {
   it('fails clearly when collection is attempted outside a browser', async () => {
     await expect(load()).rejects.toThrow(/only in a browser window/);
     await expect(collect()).rejects.toThrow(/only in a browser window/);
+  });
+
+  it('rejects incomplete Web Crypto implementations', () => {
+    vi.stubGlobal('crypto', { subtle: {} });
+
+    expect(getBrowserSupport().webCrypto).toBe(false);
+    expect(isSupported()).toBe(false);
   });
 });
 
