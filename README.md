@@ -4,6 +4,12 @@
 detection suite. It runs entirely in the browser and includes no server-side
 collection.
 
+## Why
+
+CreepJS is a research project, and its developer chose not to turn it into a
+fingerprinting library. `libcreep` was created to make its code easier for
+everyone to use in real world projects.
+
 ## Install
 
 ```sh
