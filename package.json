@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "fingerprintAlgorithmVersion": "2",
   "description": "A browser-only fingerprinting library based on the Creep.js detection suite",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/NetworkCats/libcreep.git"
+  },
   "type": "module",
   "sideEffects": false,
   "exports": {
