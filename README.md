@@ -3,7 +3,7 @@
 [![CI](https://github.com/NetworkCats/libcreep/actions/workflows/compatibility.yml/badge.svg)](https://github.com/NetworkCats/libcreep/actions/workflows/compatibility.yml)
 
 `libcreep` is a TypeScript browser fingerprinting library based on the Creep.js
-detection suite. 
+detection suite.
 
 ## Why
 
@@ -55,7 +55,7 @@ const result = await agent.get({ includeWebRTC: true });
 
 ## License
 
-MIT. 
+MIT.
 
 See [LICENSE](./LICENSE) and [NOTICE](./NOTICE). `libcreep` is an
 independent adaptation and is not an official CreepJS release.
