@@ -231,8 +231,11 @@ const getWebGLRendererConfidence = (x) => {
 // Collect trash values
 const createTrashBin = () => {
 	const bin = []
-  return {
-		getBin: () => bin,
+	  return {
+			getBin: () => bin,
+			resetBin: (baseline: unknown[] = []) => {
+				bin.splice(0, bin.length, ...baseline)
+			},
 		sendToTrash: (name, val, response = undefined) => {
 			const proxyLike = proxyBehavior(val)
 			const value = !proxyLike ? val : 'proxy behavior detected'

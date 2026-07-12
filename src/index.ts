@@ -31,6 +31,53 @@ interface RuntimeModule {
   ): Promise<FingerprintResult>;
 }
 
+let collectionQueue: Promise<void> = Promise.resolve();
+
+function getAbortReason(signal: AbortSignal): unknown {
+  return (
+    signal.reason ??
+    new DOMException('Fingerprint collection was aborted.', 'AbortError')
+  );
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw getAbortReason(signal);
+}
+
+function rejectWhenAborted<T>(
+  operation: Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  if (signal === undefined) return operation;
+
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const cleanup = (): boolean => {
+      if (settled) return false;
+      settled = true;
+      signal.removeEventListener('abort', abort);
+      return true;
+    };
+    const abort = (): void => {
+      if (cleanup()) reject(getAbortReason(signal));
+    };
+
+    signal.addEventListener('abort', abort, { once: true });
+    if (signal.aborted) {
+      abort();
+      return;
+    }
+    void operation.then(
+      (value) => {
+        if (cleanup()) resolve(value);
+      },
+      (error: unknown) => {
+        if (cleanup()) reject(error);
+      },
+    );
+  });
+}
+
 function assertBrowserEnvironment(): void {
   if (!isBrowserEnvironment()) {
     throw new TypeError(
@@ -50,10 +97,31 @@ function assertSupported(): void {
 async function waitForDocumentBody(): Promise<void> {
   if (document.body !== null) return;
 
-  await new Promise<void>((resolve) => {
-    document.addEventListener('DOMContentLoaded', () => resolve(), {
-      once: true,
+  if (document.readyState === 'loading') {
+    await new Promise<void>((resolve) => {
+      document.addEventListener('DOMContentLoaded', () => resolve(), {
+        once: true,
+      });
     });
+    if (document.body !== null) return;
+  }
+
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = (): void => {
+      if (settled || document.body === null) return;
+      settled = true;
+      observer.disconnect();
+      resolve();
+    };
+    const observer = new MutationObserver(() => {
+      finish();
+    });
+    observer.observe(document.documentElement ?? document, {
+      childList: true,
+      subtree: true,
+    });
+    finish();
   });
 }
 
@@ -67,7 +135,7 @@ export function getBrowserSupport(): BrowserSupport {
   const browserEnvironment = isBrowserEnvironment();
   return {
     browserEnvironment,
-    secureContext: browserEnvironment && window.isSecureContext,
+    secureContext: browserEnvironment && window.isSecureContext === true,
     webCrypto: typeof crypto !== 'undefined' && crypto.subtle !== undefined,
     workers: browserEnvironment && typeof Worker !== 'undefined',
   };
@@ -96,23 +164,23 @@ export async function load(
   );
   const workerStrategy = options.worker?.strategy ?? 'auto';
   const debug = options.debug ?? false;
-  let queue: Promise<void> = Promise.resolve();
-
   return {
     algorithmVersion: ALGORITHM_VERSION,
     version: VERSION,
     get(getOptions: GetOptions = {}): Promise<FingerprintResult> {
-      const operation = queue.then(() =>
-        runtime.collectFingerprint({
+      const queuedOperation = collectionQueue.then(() => {
+        throwIfAborted(getOptions.signal);
+        return runtime.collectFingerprint({
           ...getOptions,
           workerStrategy,
           workerUrl,
-        }),
-      );
-      queue = operation.then(
+        });
+      });
+      collectionQueue = queuedOperation.then(
         () => undefined,
         () => undefined,
       );
+      const operation = rejectWhenAborted(queuedOperation, getOptions.signal);
       if (debug) {
         void operation.then(
           (result) => {

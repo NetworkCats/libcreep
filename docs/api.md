@@ -3,8 +3,9 @@
 ## Loading and collection
 
 `load(options?)` initializes the browser runtime and returns a reusable agent.
-Calls through one agent are serialized because several Creep.js probes share
-temporary state.
+All collections from the loaded module are serialized, including calls through
+separate agents and `collect()`, because several Creep.js probes share temporary
+browser state.
 
 ```ts
 import { load } from 'libcreep';
@@ -43,7 +44,9 @@ The default `auto` worker strategy tries a shared worker and then a dedicated
 worker. `shared-first` currently has the same order but explicitly fixes that
 preference. `dedicated` uses only a dedicated worker. `service-first` tries a
 service worker before shared and dedicated workers; it is opt-in because
-registration mutates origin state.
+registration temporarily mutates origin state. It uses an isolated scope and
+removes only the registration it created, leaving existing application service
+workers intact.
 
 ## Get options
 
@@ -58,7 +61,8 @@ interface GetOptions {
 WebRTC SDP, STUN, and address collection is disabled by default. `signal` and
 `timeoutMs` cancel collection and release active worker, WebRTC, audio, and DOM
 resources. A timeout rejects with `TimeoutError`; an aborted signal rejects
-with its abort reason.
+with its abort reason. A queued call rejects promptly if its signal is aborted
+and is removed without starting another collection.
 
 ```ts
 const controller = new AbortController();

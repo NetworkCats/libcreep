@@ -39,7 +39,7 @@ export default async function getHeadlessFeatures({
 							'Notification' in window &&
 							Notification.permission === 'denied'
 						)
-					})()
+						})().catch(() => false)
 				),
 				noPlugins: IS_BLINK && navigator.plugins.length === 0,
 				noMimeTypes: IS_BLINK && mimeTypes.length === 0,
@@ -48,27 +48,32 @@ export default async function getHeadlessFeatures({
 					'Notification' in window &&
 					(Notification.permission == 'denied')
 				),
-				hasKnownBgColor: IS_BLINK && (() => {
-					let rendered = PARENT_PHANTOM
-					if (!PARENT_PHANTOM) {
-						rendered = document.createElement('div')
-						document.body.appendChild(rendered)
-					}
-					if (!rendered) return false
-					rendered.setAttribute('style', `background-color: ActiveText`)
-					const { backgroundColor: activeText } = getComputedStyle(rendered) || []
-					if (!PARENT_PHANTOM) {
-						document.body.removeChild(rendered)
-					}
-					return activeText === 'rgb(255, 0, 0)'
-				})(),
+					hasKnownBgColor: IS_BLINK && (() => {
+						let rendered = PARENT_PHANTOM
+						let temporary = false
+						if (!PARENT_PHANTOM) {
+							rendered = document.createElement('div')
+							document.body.appendChild(rendered)
+							temporary = true
+						}
+						if (!rendered) return false
+						try {
+							rendered.setAttribute('style', `background-color: ActiveText`)
+							const { backgroundColor: activeText } = getComputedStyle(rendered) || []
+							return activeText === 'rgb(255, 0, 0)'
+						} finally {
+							if (temporary) rendered.remove()
+						}
+					})(),
 				prefersLightColor: matchMedia('(prefers-color-scheme: light)').matches,
 				uaDataIsBlank: (
-					'userAgentData' in navigator && (
+						'userAgentData' in navigator && navigator.userAgentData && (
 						// @ts-expect-error if userAgentData is null
 						navigator.userAgentData?.platform === '' ||
-						// @ts-expect-error if userAgentData is null
-						await navigator.userAgentData.getHighEntropyValues(['platform']).platform === ''
+							// @ts-expect-error if userAgentData is null
+							typeof navigator.userAgentData.getHighEntropyValues == 'function' &&
+							(await navigator.userAgentData.getHighEntropyValues(['platform'])
+								.catch(() => ({}))).platform === ''
 					)
 				),
 				pdfIsDisabled: (
@@ -82,7 +87,7 @@ export default async function getHeadlessFeatures({
 					(innerWidth === screen.width && outerHeight === screen.height) || (
 						'visualViewport' in window &&
 						// @ts-expect-error if unsupported
-						(visualViewport.width === screen.width && visualViewport.height === screen.height)
+							(visualViewport?.width === screen.width && visualViewport?.height === screen.height)
 					)
 				),
 				hasSwiftShader: /SwiftShader/.test(workerScope?.webglRenderer),
@@ -127,7 +132,7 @@ export default async function getHeadlessFeatures({
 				})(),
 				hasBadChromeRuntime: (() => {
 					// @ts-expect-error if unsupported
-					if (!('chrome' in window && 'runtime' in chrome)) {
+						if (!('chrome' in window && chrome && 'runtime' in chrome)) {
 						return false
 					}
 					try {

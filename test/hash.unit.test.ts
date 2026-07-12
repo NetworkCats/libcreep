@@ -137,4 +137,18 @@ describe('component diagnostics', () => {
       },
     });
   });
+
+  it('serializes bigint values instead of throwing', () => {
+    const components = {
+      sample: { duration: 1, status: 'fulfilled', value: 42n },
+    } as HashableComponents;
+
+    expect(JSON.parse(componentsToDebugString(components))).toEqual({
+      sample: {
+        duration: 1,
+        status: 'fulfilled',
+        value: { $type: 'bigint', value: '42' },
+      },
+    });
+  });
 });

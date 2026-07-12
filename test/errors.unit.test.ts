@@ -43,6 +43,23 @@ describe('detector error utilities', () => {
     ]);
   });
 
+  it('records asynchronous and non-object failures without leaking rejection', async () => {
+    const { attempt, captureError, getCapturedErrors } =
+      await import('../src/internal/errors/index.js');
+
+    await expect(
+      attempt(() => Promise.reject(new TypeError('async detector failure'))),
+    ).resolves.toBeUndefined();
+    expect(() => captureError(null)).not.toThrow();
+    expect(getCapturedErrors().data).toEqual([
+      {
+        trustedMessage: 'async detector failure',
+        trustedName: 'TypeError',
+      },
+      { trustedMessage: undefined, trustedName: undefined },
+    ]);
+  });
+
   it('reads nested APIs and safely invokes optional methods', async () => {
     const { caniuse } = await import('../src/internal/errors/index.js');
     const use = caniuse as (

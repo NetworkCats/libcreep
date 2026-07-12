@@ -87,7 +87,11 @@ export function componentsToDebugString(
   return JSON.stringify(
     components,
     (_key, value: unknown) =>
-      value instanceof Error ? normalizeError(value) : value,
+      value instanceof Error
+        ? normalizeError(value)
+        : typeof value === 'bigint'
+          ? { $type: 'bigint', value: value.toString() }
+          : value,
     2,
   );
 }

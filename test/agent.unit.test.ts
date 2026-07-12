@@ -87,6 +87,58 @@ describe('fingerprint agent orchestration', () => {
     expect(mockedCollectFingerprint).toHaveBeenCalledTimes(2);
   });
 
+  it('serializes collections across separate agents', async () => {
+    let resolveFirst!: (result: FingerprintResult) => void;
+    mockedCollectFingerprint
+      .mockImplementationOnce(
+        () =>
+          new Promise<FingerprintResult>((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(fingerprint);
+    const firstAgent = await load();
+    const secondAgent = await load();
+
+    const first = firstAgent.get();
+    const second = secondAgent.get();
+    await vi.waitFor(() =>
+      expect(mockedCollectFingerprint).toHaveBeenCalledOnce(),
+    );
+
+    resolveFirst(fingerprint);
+    await expect(first).resolves.toBe(fingerprint);
+    await expect(second).resolves.toBe(fingerprint);
+    expect(mockedCollectFingerprint).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects an aborted queued call without starting its collection', async () => {
+    let resolveFirst!: (result: FingerprintResult) => void;
+    mockedCollectFingerprint.mockImplementationOnce(
+      () =>
+        new Promise<FingerprintResult>((resolve) => {
+          resolveFirst = resolve;
+        }),
+    );
+    const firstAgent = await load();
+    const secondAgent = await load();
+    const controller = new AbortController();
+
+    const first = firstAgent.get();
+    const second = secondAgent.get({ signal: controller.signal });
+    await vi.waitFor(() =>
+      expect(mockedCollectFingerprint).toHaveBeenCalledOnce(),
+    );
+    controller.abort();
+
+    await expect(second).rejects.toMatchObject({ name: 'AbortError' });
+    expect(mockedCollectFingerprint).toHaveBeenCalledOnce();
+    resolveFirst(fingerprint);
+    await expect(first).resolves.toBe(fingerprint);
+    await Promise.resolve();
+    expect(mockedCollectFingerprint).toHaveBeenCalledOnce();
+  });
+
   it('logs successful debug reports without changing the result', async () => {
     mockedCollectFingerprint.mockResolvedValueOnce(fingerprint);
     const debug = vi
@@ -153,6 +205,7 @@ describe('fingerprint agent orchestration', () => {
         },
       ),
       body: null,
+      readyState: 'loading',
     });
 
     let settled = false;
@@ -164,10 +217,44 @@ describe('fingerprint agent orchestration', () => {
 
     expect(settled).toBe(false);
     expect(onReady).toBeTypeOf('function');
+    (document as unknown as { body: object | null }).body = {};
     onReady?.();
     await expect(loading).resolves.toMatchObject({
       algorithmVersion: ALGORITHM_VERSION,
       version: VERSION,
     });
+  });
+
+  it('waits for a body inserted after DOMContentLoaded', async () => {
+    const documentStub = {
+      body: null as object | null,
+      documentElement: {},
+      readyState: 'interactive',
+    };
+    const disconnect = vi.fn();
+    vi.stubGlobal('document', documentStub);
+    vi.stubGlobal(
+      'MutationObserver',
+      class {
+        private readonly callback: MutationCallback;
+
+        constructor(callback: MutationCallback) {
+          this.callback = callback;
+        }
+
+        disconnect = disconnect;
+
+        observe(): void {
+          documentStub.body = {};
+          this.callback([], this as unknown as MutationObserver);
+        }
+      },
+    );
+
+    await expect(load()).resolves.toMatchObject({
+      algorithmVersion: ALGORITHM_VERSION,
+      version: VERSION,
+    });
+    expect(disconnect).toHaveBeenCalledOnce();
   });
 });

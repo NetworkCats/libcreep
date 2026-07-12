@@ -18,7 +18,7 @@ const createErrorsCaptured = () => {
 				SecurityError: true,
 			}
 			const hasInnerSpace = (s) => /.+(\s).+/g.test(s) // ignore AOPR noise
-			const { name, message } = error
+			const { name, message } = error || {}
 			const trustedMessage = (
 				!hasInnerSpace(message) ? undefined :
 					!customMessage ? message :
@@ -30,6 +30,9 @@ const createErrorsCaptured = () => {
 			)
 			return undefined
 		},
+		resetErrors: (baseline: unknown[] = []) => {
+			errors.splice(0, errors.length, ...baseline)
+		},
 	}
 }
 const errorsCaptured = createErrorsCaptured()
@@ -37,7 +40,10 @@ const { captureError } = errorsCaptured
 
 const attempt = (fn, customMessage = '') => {
 	try {
-		return fn()
+		const result = fn()
+		return result && typeof result.then == 'function' ? result.catch((error) => (
+			captureError(error, customMessage)
+		)) : result
 	} catch (error) {
 		if (customMessage) {
 			return captureError(error, customMessage)

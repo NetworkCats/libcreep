@@ -5,14 +5,19 @@ import getCSSMedia from './internal/cssmedia/index.js';
 import getHTMLElementVersion from './internal/document/index.js';
 import getClientRects from './internal/domrect/index.js';
 import getConsoleErrors from './internal/engine/index.js';
-import { getCapturedErrors } from './internal/errors/index.js';
+import { errorsCaptured, getCapturedErrors } from './internal/errors/index.js';
 import getEngineFeatures, {
   getFeaturesLie,
 } from './internal/features/index.js';
 import getFonts from './internal/fonts/index.js';
 import getHeadlessFeatures from './internal/headless/index.js';
 import getIntl from './internal/intl/index.js';
-import { getLies, PARENT_PHANTOM } from './internal/lies/index.js';
+import {
+  getLies,
+  lieRecords,
+  removePhantom,
+  renewPhantom,
+} from './internal/lies/index.js';
 import getMaths from './internal/math/index.js';
 import getMedia from './internal/media/index.js';
 import getNavigator from './internal/navigator/index.js';
@@ -22,7 +27,7 @@ import getVoices from './internal/speech/index.js';
 import { getStatus } from './internal/status/index.js';
 import getSVG from './internal/svg/index.js';
 import getTimezone from './internal/timezone/index.js';
-import { getTrash } from './internal/trash/index.js';
+import { getTrash, trashBin } from './internal/trash/index.js';
 import { getBotHash, getFuzzyHash, hashify } from './internal/utils/crypto.js';
 import {
   braveBrowser,
@@ -31,6 +36,7 @@ import {
   getBraveUnprotectedParameters,
   IS_BLINK,
   LowerEntropy,
+  Analysis,
 } from './internal/utils/helpers.js';
 import getCanvasWebgl from './internal/webgl/index.js';
 import getWebRTCData, {
@@ -93,12 +99,8 @@ function throwIfAborted(signal?: AbortSignal): void {
   );
 }
 
-function isCancellation(error: unknown, signal?: AbortSignal): boolean {
-  return (
-    signal?.aborted === true ||
-    (error instanceof DOMException &&
-      (error.name === 'AbortError' || error.name === 'TimeoutError'))
-  );
+function isCancellation(_error: unknown, signal?: AbortSignal): boolean {
+  return signal?.aborted === true;
 }
 
 function createCollectionCancellation(
@@ -194,6 +196,31 @@ function asRecord(value: unknown): UnknownRecord {
 function snapshot<T>(value: T): T {
   if (typeof structuredClone === 'function') return structuredClone(value);
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+const detectorStateBaseline = {
+  analysis: snapshot(Analysis),
+  errors: snapshot(getCapturedErrors().data),
+  lies: snapshot(getLies().data),
+  lowerEntropy: snapshot(LowerEntropy),
+  trash: snapshot(getTrash().trashBin),
+};
+
+function resetRecord(
+  record: Record<string, unknown>,
+  baseline: Record<string, unknown>,
+): void {
+  for (const key of Object.keys(record)) delete record[key];
+  Object.assign(record, snapshot(baseline));
+}
+
+function resetDetectorState(): void {
+  errorsCaptured.resetErrors(snapshot(detectorStateBaseline.errors));
+  lieRecords.resetRecords(snapshot(detectorStateBaseline.lies));
+  trashBin.resetBin(snapshot(detectorStateBaseline.trash));
+  resetRecord(Analysis, detectorStateBaseline.analysis);
+  resetRecord(LowerEntropy, detectorStateBaseline.lowerEntropy);
+  renewPhantom();
 }
 
 async function runAuxiliary<T>(
@@ -640,6 +667,7 @@ export async function collectFingerprint(
     options.signal,
     options.timeoutMs,
   );
+  resetDetectorState();
   const { signal } = cancellation;
   const auxiliaryPromise = collectAuxiliary(
     options.includeWebRTC ?? false,
@@ -771,8 +799,6 @@ export async function collectFingerprint(
     throw error;
   } finally {
     cancellation.dispose();
-    if (PARENT_PHANTOM?.parentNode) {
-      PARENT_PHANTOM.parentNode.removeChild(PARENT_PHANTOM);
-    }
+    removePhantom();
   }
 }

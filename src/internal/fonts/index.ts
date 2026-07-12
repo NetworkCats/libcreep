@@ -186,7 +186,8 @@ export default async function getFonts() {
 				pixelSizeSystemSum,
 			}
 		} catch (error) {
-			console.error(error)
+			doc.getElementById('pixel-emoji-container')?.remove()
+			captureError(error, 'font emoji measurement failed')
 			return {
 				emojiSet: [],
 				pixelSizeSystemSum: 0,
@@ -215,7 +216,7 @@ export default async function getFonts() {
 			}, [] as string[])
 			return [...new Set([...fontsChecked, ...fontsLoaded])].sort()
 		} catch (error) {
-			console.error(error)
+			captureError(error, 'FontFace loading failed')
 			return []
 		}
 	}

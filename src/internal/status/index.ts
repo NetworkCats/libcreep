@@ -40,17 +40,19 @@ function getTimingResolution(): [number, number] {
 }
 
 function getClientLitter(): string[] {
+  let iframe: HTMLIFrameElement | undefined
   try {
-    const iframe = document.createElement('iframe')
+    iframe = document.createElement('iframe')
     document.body.appendChild(iframe)
     const iframeWindow = iframe.contentWindow
     const windowKeys = Object.getOwnPropertyNames(window)
     const iframeKeys = Object.getOwnPropertyNames(iframeWindow)
-    document.body.removeChild(iframe)
     const clientKeys = windowKeys.filter((x) => !iframeKeys.includes(x))
     return clientKeys
   } catch (err) {
     return []
+  } finally {
+    iframe?.remove()
   }
 }
 
@@ -82,22 +84,28 @@ interface BatteryManager {
   level: number
 }
 async function getBattery(): Promise<BatteryManager | null> {
-  if (!('getBattery' in navigator)) return null
+  if (typeof navigator?.getBattery != 'function') return null
   // @ts-expect-error if not supported
-  return navigator.getBattery()
+  return navigator.getBattery().catch(() => null)
 }
 
 export async function getStorage(): Promise<number | null> {
-  if (!navigator?.storage?.estimate) return null
-  return Promise.all([
-    navigator.storage.estimate().then(({ quota }) => quota),
-    new Promise((resolve) => {
-      // @ts-expect-error if not supported
-      navigator.webkitTemporaryStorage.queryUsageAndQuota((_, quota) => {
+  if (typeof navigator?.storage?.estimate != 'function') return null
+  const quotaFromEstimate = navigator.storage.estimate()
+    .then(({ quota }) => quota ?? null)
+    .catch(() => null)
+  // @ts-expect-error legacy Blink API
+  const queryUsageAndQuota = navigator.webkitTemporaryStorage?.queryUsageAndQuota
+  const quotaFromLegacyApi = typeof queryUsageAndQuota != 'function' ? Promise.resolve(null) :
+    new Promise<number | null>((resolve) => {
+      queryUsageAndQuota.call(navigator.webkitTemporaryStorage, (_, quota) => {
         resolve(quota)
       })
-    }).catch(() => null),
-  ]).then(([quota1, quota2]) => (quota2 || quota1) as number)
+    }).catch(() => null)
+  return Promise.all([
+    quotaFromEstimate,
+    quotaFromLegacyApi,
+  ]).then(([quota1, quota2]) => quota2 ?? quota1)
 }
 
 async function getScriptSize(): Promise<number | null> {

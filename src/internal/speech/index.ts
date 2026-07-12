@@ -7,34 +7,47 @@ export default async function getVoices() {
 	// Don't run voice immediately. This is unstable
 	// wait a bit for services to load
 	await new Promise((resolve) => setTimeout(() => resolve(undefined), 50))
+	const synthesis = window.speechSynthesis
 	return new Promise(async (resolve) => {
+		let settled = false
+		let giveUpOnVoices
+		let getVoices
+		const finish = (value) => {
+			if (settled) return
+			settled = true
+			clearTimeout(giveUpOnVoices)
+			if (getVoices && synthesis?.removeEventListener) {
+				synthesis.removeEventListener('voiceschanged', getVoices)
+			} else if (synthesis?.onvoiceschanged == getVoices) {
+				synthesis.onvoiceschanged = null
+			}
+			resolve(value)
+		}
 		try {
 			const timer = createTimer()
 			await queueEvent(timer)
 
 			// use window since iframe is unstable in FF
-			const supported = 'speechSynthesis' in window
-			supported && speechSynthesis.getVoices() // warm up
+			const supported = typeof synthesis?.getVoices == 'function'
+			supported && synthesis.getVoices() // warm up
 			if (!supported) {
 				logTestResult({ test: 'speech', passed: false })
-				return resolve(null)
+				return finish(null)
 			}
 
 			const voicesLie = !!lieProps['SpeechSynthesis.getVoices']
 
-			const giveUpOnVoices = setTimeout(() => {
+			giveUpOnVoices = setTimeout(() => {
 				logTestResult({ test: 'speech', passed: false })
-				return resolve(null)
+				return finish(null)
 			}, 300)
 
-			const getVoices = () => {
-				const data = speechSynthesis.getVoices()
+			getVoices = () => {
+				const data = synthesis.getVoices()
 				const localServiceDidLoad = (data || []).find((x) => x.localService)
 				if (!data || !data.length || (IS_BLINK && !localServiceDidLoad)) {
 					return
 				}
-				clearTimeout(giveUpOnVoices)
-
 				// filter first occurrence of unique voiceURI data
 				const getUniques = (
 					data: SpeechSynthesisVoice[],
@@ -75,7 +88,7 @@ export default async function getVoices() {
 				}
 
 				logTestResult({ time: timer.stop(), test: 'speech', passed: true })
-				return resolve({
+				return finish({
 					local,
 					remote,
 					languages,
@@ -86,14 +99,15 @@ export default async function getVoices() {
 			}
 
 			getVoices()
-			if (speechSynthesis.addEventListener) {
-				return speechSynthesis.addEventListener('voiceschanged', getVoices)
+			if (settled) return
+			if (synthesis.addEventListener) {
+				return synthesis.addEventListener('voiceschanged', getVoices)
 			}
-			speechSynthesis.onvoiceschanged = getVoices
+			synthesis.onvoiceschanged = getVoices
 		} catch (error) {
 			logTestResult({ test: 'speech', passed: false })
 			captureError(error)
-			return resolve(null)
+			return finish(null)
 		}
 	})
 }

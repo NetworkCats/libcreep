@@ -261,7 +261,7 @@ const getJSCoreFeatures = (win) => {
 		}, [])
 		return features
 	} catch (error) {
-		console.error(error)
+		captureError(error, 'window feature collection failed')
 		return []
 	}
 }

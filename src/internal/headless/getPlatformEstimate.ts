@@ -25,7 +25,7 @@ export default function getPlatformEstimate(): [
     const hasHid = 'HID' in window && 'HIDDevice' in window
     const hasSerialPort = 'SerialPort' in window && 'Serial' in window
     const hasSharedWorker = 'SharedWorker' in window
-    const hasTouch = 'ontouchstart' in Window && 'TouchEvent' in window
+    const hasTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0
     const hasAppBadge = 'setAppBadge' in Navigator.prototype
 
     const hasFeature = (version: boolean, condition: boolean) => {

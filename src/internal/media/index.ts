@@ -26,13 +26,14 @@ export default async function getMedia() {
 			const mimeTypes = getMimeTypeShortList()
 			const videoEl = document.createElement('video')
 			const audioEl = new Audio()
-			const isMediaRecorderSupported = 'MediaRecorder' in window
+			const isMediaSourceSupported = typeof window.MediaSource?.isTypeSupported == 'function'
+			const isMediaRecorderSupported = typeof window.MediaRecorder?.isTypeSupported == 'function'
 			const types = mimeTypes.reduce((acc, type) => {
 				const data = {
 					mimeType: type,
 					audioPlayType: audioEl.canPlayType(type),
 					videoPlayType: videoEl.canPlayType(type),
-					mediaSource: MediaSource.isTypeSupported(type),
+					mediaSource: isMediaSourceSupported ? MediaSource.isTypeSupported(type) : false,
 					mediaRecorder: isMediaRecorderSupported ? MediaRecorder.isTypeSupported(type) : false,
 				}
 				if (!data.audioPlayType && !data.videoPlayType && !data.mediaSource && !data.mediaRecorder) {

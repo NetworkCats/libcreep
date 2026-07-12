@@ -1,7 +1,7 @@
 {
   "name": "libcreep",
   "version": "0.1.0",
-  "fingerprintAlgorithmVersion": "1",
+  "fingerprintAlgorithmVersion": "2",
   "description": "A browser-only fingerprinting library based on the Creep.js detection suite",
   "type": "module",
   "sideEffects": false,
@@ -32,7 +32,7 @@
     "test:coverage": "npm run build && vitest run --coverage",
     "test:speed": "npm run build && vitest run --config vitest.speed.config.ts",
     "typecheck": "tsc -p tsconfig.json",
-    "validate": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run build && publint && attw --pack"
+    "validate": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run build && publint && attw --pack --profile esm-only"
   },
   "engines": {
     "node": ">=26.5.0"

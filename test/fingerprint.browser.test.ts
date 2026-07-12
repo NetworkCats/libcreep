@@ -55,11 +55,82 @@ describe('frontend API', () => {
     expect(webRTCResult.auxiliary.webRTC.status).not.toBe('skipped');
   });
 
+  it('keeps navigator signals when the worker is unavailable', async () => {
+    const agent = await load({
+      worker: {
+        strategy: 'dedicated',
+        url: '/missing-libcreep-worker.js',
+      },
+    });
+    const noWorkerResult = await agent.get();
+
+    expect(noWorkerResult.components.workerScope.status).toBe('unsupported');
+    expect(noWorkerResult.values.navigator?.platform).toBe(navigator.platform);
+    expect(noWorkerResult.values.navigator?.userAgent).toBe(
+      navigator.userAgent.trim().replace(/\s{2,}/, ' '),
+    );
+  });
+
+  it('isolates detector AbortErrors that are not collection cancellation', async () => {
+    const createOffer = RTCPeerConnection.prototype.createOffer;
+    RTCPeerConnection.prototype.createOffer = (() =>
+      Promise.reject(
+        new DOMException('WebRTC offer was unavailable.', 'AbortError'),
+      )) as unknown as typeof createOffer;
+
+    try {
+      const agent = await load({
+        worker: { strategy: 'auto', url: '/dist/worker.js' },
+      });
+      const isolatedResult = await agent.get({ includeWebRTC: true });
+      expect(isolatedResult.auxiliary.webRTC.status).toBe('rejected');
+    } finally {
+      RTCPeerConnection.prototype.createOffer = createOffer;
+    }
+  });
+
+  it('does not unregister an existing service worker', async () => {
+    if (!('serviceWorker' in navigator)) return;
+    const sentinel = await navigator.serviceWorker.register('/dist/worker.js', {
+      scope: '/dist/',
+      type: 'module',
+    });
+
+    try {
+      const agent = await load({
+        worker: {
+          strategy: 'service-first',
+          url: '/dist/worker.js',
+        },
+      });
+      const serviceWorkerResult = await agent.get({ timeoutMs: 10_000 });
+      expect(serviceWorkerResult.components.workerScope.status).toBe(
+        'fulfilled',
+      );
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      expect(
+        registrations.some(
+          (registration) => registration.scope === sentinel.scope,
+        ),
+      ).toBe(true);
+    } finally {
+      await sentinel.unregister();
+    }
+  });
+
   it('supports canonical hashing and debug serialization', async () => {
     await expect(hashComponents(result.components)).resolves.toBe(
       result.rawVisitorId,
     );
     expect(componentsToDebugString(result.components)).toContain('workerScope');
+  });
+
+  it('does not accumulate detector records across repeated collection', () => {
+    expect(webRTCResult.values.capturedErrors).toEqual(
+      result.values.capturedErrors,
+    );
+    expect(webRTCResult.values.lies).toEqual(result.values.lies);
+    expect(webRTCResult.values.trash).toEqual(result.values.trash);
   });
 
   it('cancels queued and active collection', async () => {

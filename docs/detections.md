@@ -38,13 +38,13 @@ browser API is isolated in `components` and doesn't stop other probes.
 
 ## Supplemental detections
 
-| Detection                             | Default | Reason                                                                     |
-| ------------------------------------- | ------- | -------------------------------------------------------------------------- |
-| Media Capabilities                    | Yes     | Passive API support query; exported by upstream Creep.js                   |
-| Media device kinds                    | Yes     | Passive `enumerateDevices()` query; doesn't request permission             |
-| Battery/storage/network/client status | Yes     | Passive local browser state used by the upstream status panel              |
-| WebRTC SDP/STUN/address               | No      | Contacts STUN servers, may reveal network data, and can take seconds       |
-| Service-worker scope                  | No      | Registration mutates origin state; shared/dedicated workers remain default |
+| Detection                             | Default | Reason                                                                               |
+| ------------------------------------- | ------- | ------------------------------------------------------------------------------------ |
+| Media Capabilities                    | Yes     | Passive API support query; exported by upstream Creep.js                             |
+| Media device kinds                    | Yes     | Passive `enumerateDevices()` query; doesn't request permission                       |
+| Battery/storage/network/client status | Yes     | Passive local browser state used by the upstream status panel                        |
+| WebRTC SDP/STUN/address               | No      | Contacts STUN servers, may reveal network data, and can take seconds                 |
+| Service-worker scope                  | No      | Temporary registration mutates origin state; shared/dedicated workers remain default |
 
 Enable WebRTC with `agent.get({includeWebRTC: true})`. Enable the
 service-worker-first strategy with

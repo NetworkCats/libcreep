@@ -5,8 +5,6 @@ import { sendToTrash } from '../trash'
 
 import { createTimer, queueEvent, LIKE_BRAVE, CSS_FONT_FAMILY, EMOJIS, logTestResult, IS_WEBKIT, IS_BLINK, Analysis, LowerEntropy, IS_GECKO } from '../utils/helpers'
 // inspired by https://arkenfox.github.io/TZP/tests/canvasnoise.html
-let pixelImageRandom = ''
-
 const getPixelMods = () => {
 	const pattern1 = []
 	const pattern2 = []
@@ -20,22 +18,18 @@ const getPixelMods = () => {
 			willReadFrequently: true,
 			desynchronized: true,
 		}
-		const canvasDisplay1 = document.createElement('canvas')
 		const canvasDisplay2 = document.createElement('canvas')
 		const canvas1 = document.createElement('canvas')
 		const canvas2 = document.createElement('canvas')
-		const contextDisplay1 = canvasDisplay1.getContext('2d', options)
 		const contextDisplay2 = canvasDisplay2.getContext('2d', options)
 		const context1 = canvas1.getContext('2d', options)
 		const context2 = canvas2.getContext('2d', options)
 
-		if (!contextDisplay1 || !contextDisplay2 || !context1 || !context2) {
+		if (!contextDisplay2 || !context1 || !context2) {
 			throw new Error('canvas context blocked')
 		}
 
 		// set the dimensions
-		canvasDisplay1.width = len * visualMultiplier
-		canvasDisplay1.height = len * visualMultiplier
 		canvasDisplay2.width = len * visualMultiplier
 		canvasDisplay2.height = len * visualMultiplier
 		canvas1.width = len
@@ -51,14 +45,6 @@ const getPixelMods = () => {
 			const colors = `${red}, ${green}, ${blue}, ${alpha}`
 			context1.fillStyle = `rgba(${colors})`
 			context1.fillRect(x, y, 1, 1)
-			// capture data in visuals
-			contextDisplay1.fillStyle = `rgba(${colors})`
-			contextDisplay1.fillRect(
-				x * visualMultiplier,
-				y * visualMultiplier,
-				1 * visualMultiplier,
-				1 * visualMultiplier,
-			)
 			return pattern1.push(colors) // collect the pixel pattern
 		}))
 
@@ -113,14 +99,14 @@ const getPixelMods = () => {
 			}
 		})
 
-		pixelImageRandom = canvasDisplay1.toDataURL() // template use only
 		const pixelImage = canvasDisplay2.toDataURL()
 
 		const rgba = rgbaChannels.size ? [...rgbaChannels].sort().join(', ') : undefined
 		const pixels = patternDiffs.length || undefined
 		return { rgba, pixels, pixelImage }
 	} catch (error) {
-		return console.error(error)
+		captureError(error, 'canvas pixel modification test failed')
+		return
 	}
 }
 

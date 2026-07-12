@@ -341,6 +341,8 @@ export default async function getClientRects() {
 			lied,
 		}
 	} catch (error) {
+		const doc = PHANTOM_DARKNESS?.document?.body ? PHANTOM_DARKNESS.document : document
+		doc.getElementById(`${instanceId}-client-rects-div`)?.remove()
 		logTestResult({ test: 'rects', passed: false })
 		captureError(error)
 		return

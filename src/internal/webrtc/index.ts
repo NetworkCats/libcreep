@@ -20,6 +20,7 @@ const getMediaConfig = (codec, video, audio) => ({
 })
 
 export const getMediaCapabilities = async () => {
+	if (typeof navigator?.mediaCapabilities?.decodingInfo != 'function') return null
 	const video = {
 		width: 1920,
 		height: 1080,

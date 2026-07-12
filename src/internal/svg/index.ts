@@ -132,6 +132,8 @@ export default async function getSVG() {
 		logTestResult({ time: timer.stop(), test: 'svg', passed: true })
 		return data
 	} catch (error) {
+		const doc = PHANTOM_DARKNESS?.document?.body ? PHANTOM_DARKNESS.document : document
+		doc.getElementById('svg-container')?.remove()
 		logTestResult({ test: 'svg', passed: false })
 		captureError(error)
 		return

@@ -33,9 +33,11 @@ const agent = await load({
 });
 ```
 
-Service workers require HTTPS or localhost, a valid JavaScript MIME type, and a
-scope that covers the page. Host the complete `dist` output because the worker
-entry imports an additional packaged chunk.
+Service workers require HTTPS or localhost and a valid JavaScript MIME type.
+The probe creates a unique scope beneath the worker asset, waits for that worker
+to activate, and unregisters only its temporary registration. It does not
+replace or remove an existing application service worker. Host the complete
+`dist` output because the worker entry imports an additional packaged chunk.
 
 ## Passive supplemental signals
 

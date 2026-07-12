@@ -344,7 +344,7 @@ export default async function getOfflineAudioContext(signal?: AbortSignal) {
 					result.reduce((acc, n) => acc += +n, 0)
 				)
 			} catch (error) {
-				console.error(error)
+				captureError(error, 'AudioBuffer noise test failed')
 				return 0
 			}
 		}

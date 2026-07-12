@@ -162,9 +162,11 @@ export default function getCSS() {
 			if (!el) {
 				el = document.createElement('div')
 				document.body.append(el)
-				const systemStyles = getStyles(el)
-				el.parentNode.removeChild(el)
-				return systemStyles
+				try {
+					return getStyles(el)
+				} finally {
+					el.remove()
+				}
 			}
 			return getStyles(el)
 		} catch (error) {

@@ -147,7 +147,9 @@ export async function spawnWorker() {
 		const timer = createTimer()
 		await queueEvent(timer)
 
-		const userAgentData = await getUserAgentData(navigator).catch((error) => console.error(error))
+		const userAgentData = await getUserAgentData(navigator).catch((error) => (
+			captureError(error, 'worker userAgentData failed')
+		))
 
 		// webgl
 		const { webglVendor, webglRenderer } = getWebglData() || {}
@@ -290,6 +292,7 @@ export default async function getBestWorkerScope(
 			if (!hasConstructor(dedicatedWorker, 'Worker')) return finish(null)
 			dedicatedWorker.onmessage = (event) => finish(event.data)
 			dedicatedWorker.onerror = () => finish(null)
+			dedicatedWorker.onmessageerror = () => finish(null)
 		})
 		const getSharedWorker = ({ scriptSource }) => new Promise((resolve, reject) => {
 			let sharedWorker
@@ -312,42 +315,55 @@ export default async function getBestWorkerScope(
 			sharedWorker.port.start()
 			sharedWorker.port.onmessage = (event) => finish(event.data)
 			sharedWorker.port.onmessageerror = () => finish(null)
+			sharedWorker.onerror = () => finish(null)
 		})
 		const getServiceWorker = ({ scriptSource }) => new Promise((resolve, reject) => {
 			let registration
+			let stateWorker
 			let settled = false
-			const onMessage = (event) => finish(event.data)
+			const expectedScriptURL = new URL(scriptSource, location.href).href
+			const onMessage = (event) => {
+				if (event.source?.scriptURL != expectedScriptURL) return
+				finish(event.data)
+			}
+			const onStateChange = () => {
+				if (stateWorker?.state == 'redundant') return finish(null)
+				if (stateWorker?.state != 'activated') return
+				navigator.serviceWorker.addEventListener('message', onMessage)
+				stateWorker.postMessage(undefined)
+			}
 			const finish = (value, error) => {
 				if (settled) return
 				settled = true
 				clearTimeout(giveUpOnWorker)
 				signal?.removeEventListener('abort', abort)
 				navigator.serviceWorker?.removeEventListener('message', onMessage)
-				void registration?.unregister()
-				return error ? reject(error) : resolve(value)
+				stateWorker?.removeEventListener('statechange', onStateChange)
+				return Promise.resolve(registration?.unregister()).catch(() => undefined).then(() => (
+					error ? reject(error) : resolve(value)
+				))
 			}
 			const abort = () => finish(undefined, signal.reason || new DOMException('Worker detection was aborted.', 'AbortError'))
 			const giveUpOnWorker = setTimeout(() => finish(null), 4000)
 			signal?.addEventListener('abort', abort, { once: true })
 			if (signal?.aborted) return abort()
 			if (!ask(() => navigator.serviceWorker.register)) return finish(null)
+			const scope = new URL(
+				`./__libcreep-${Date.now()}-${Math.random().toString(36).slice(2)}/`,
+				expectedScriptURL,
+			).href
 
-			return navigator.serviceWorker.register(scriptSource, { type: 'module' }).then((registered) => {
+			return navigator.serviceWorker.register(scriptSource, { type: 'module', scope }).then((registered) => {
 				registration = registered
 				if (settled) {
 					void registration.unregister()
 					return
 				}
 				if (!hasConstructor(registration, 'ServiceWorkerRegistration')) return finish(null)
-				return navigator.serviceWorker.ready.then((readyRegistration) => {
-					registration = readyRegistration
-					if (settled) {
-						void registration.unregister()
-						return
-					}
-					navigator.serviceWorker.addEventListener('message', onMessage)
-					registration.active?.postMessage(undefined)
-				})
+				stateWorker = registration.installing || registration.waiting || registration.active
+				if (!stateWorker) return finish(null)
+				stateWorker.addEventListener('statechange', onStateChange)
+				return onStateChange()
 			}).catch(() => finish(null))
 		})
 

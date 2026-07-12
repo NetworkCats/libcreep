@@ -13,6 +13,12 @@ function createLieRecords() {
 	const records: Record<string, string[]> = {}
 	return {
 		getRecords: () => records,
+		resetRecords: (baseline: Record<string, string[]> = {}) => {
+			Object.keys(records).forEach((name) => delete records[name])
+			Object.entries(baseline).forEach(([name, lies]) => {
+				records[name] = [...lies]
+			})
+		},
 		documentLie: (name: string, lie: string | string[]) => {
 			const isArray = lie instanceof Array
 			if (records[name]) {
@@ -460,7 +466,22 @@ function getPhantomIframe(): Phantom {
 		return { iframeWindow: self }
 	}
 }
-const { iframeWindow: PHANTOM_DARKNESS, div: PARENT_PHANTOM } = getPhantomIframe() || {}
+let PHANTOM_DARKNESS: Window
+let PARENT_PHANTOM: HTMLDivElement | undefined
+
+function renewPhantom(): void {
+	if (PARENT_PHANTOM?.isConnected && PHANTOM_DARKNESS?.document?.body) return
+	const phantom = getPhantomIframe()
+	PHANTOM_DARKNESS = phantom.iframeWindow
+	PARENT_PHANTOM = phantom.div
+}
+
+function removePhantom(): void {
+	PARENT_PHANTOM?.remove()
+	PARENT_PHANTOM = undefined
+}
+
+renewPhantom()
 
 function getPrototypeLies(scope: Window & typeof globalThis) {
 	const lieDetector = createLieDetector(scope)
@@ -840,6 +861,7 @@ if (!IS_WORKER_SCOPE) {
 	const message = `${propsSearched.length} API properties analyzed in ${PROTO_BENCHMARK}ms (${lieList.length} corrupted)`
 	void message
 }
+removePhantom()
 
 const getPluginLies = (plugins: PluginArray, mimeTypes: MimeTypeArray) => {
 	const lies = [] // collect lie types
@@ -923,4 +945,4 @@ const getLies = () => {
 	return { data: records, totalLies }
 }
 
-export { getRandomValues, documentLie, createLieDetector, PHANTOM_DARKNESS, PARENT_PHANTOM, lieProps, prototypeLies, lieRecords, getLies, getPluginLies, PROTO_BENCHMARK }
+export { getRandomValues, documentLie, createLieDetector, PHANTOM_DARKNESS, PARENT_PHANTOM, renewPhantom, removePhantom, lieProps, prototypeLies, lieRecords, getLies, getPluginLies, PROTO_BENCHMARK }

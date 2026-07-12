@@ -47,7 +47,7 @@ export default async function getNavigator(workerScope) {
 					)
 				}
 
-				if (platform != workerScope.platform) {
+				if (workerScope && platform != workerScope.platform) {
 					lied = true // documented in the worker source
 				}
 
@@ -80,7 +80,7 @@ export default async function getNavigator(workerScope) {
 					sendToTrash(`userAgent is gibberish`, userAgent)
 				}
 
-				if (userAgent != workerScope.userAgent) {
+				if (workerScope && userAgent != workerScope.userAgent) {
 					lied = true // documented in the worker source
 				}
 
@@ -130,7 +130,7 @@ export default async function getNavigator(workerScope) {
 					sendToTrash('deviceMemory', `available memory ${memoryInGigabytes}GB is greater than device memory ${deviceMemory}GB`)
 				}
 
-				if (deviceMemory !== workerScope.deviceMemory) {
+				if (workerScope && deviceMemory !== workerScope.deviceMemory) {
 					lied = true // documented in the worker source
 				}
 
@@ -183,7 +183,7 @@ export default async function getNavigator(workerScope) {
 
 				const { hardwareConcurrency } = navigator
 
-				if (hardwareConcurrency !== workerScope.hardwareConcurrency) {
+				if (workerScope && hardwareConcurrency !== workerScope.hardwareConcurrency) {
 					lied = true // documented in the worker source
 				}
 
@@ -200,10 +200,9 @@ export default async function getNavigator(workerScope) {
 					if (langs != lang) {
 						sendToTrash('language/languages', `${[language, languages].join(' ')} mismatch`)
 					}
-					return `${languages.join(', ')} (${language})`
 				}
 
-				if (language != workerScope.language) {
+				if (workerScope && language != workerScope.language) {
 					lied = true
 					documentLie(
 						`Navigator.language`,
@@ -211,7 +210,7 @@ export default async function getNavigator(workerScope) {
 					)
 				}
 
-				if (languages !== workerScope.languages) {
+				if (workerScope && ''+languages !== workerScope.languages) {
 					lied = true
 					documentLie(
 						`Navigator.languages`,
@@ -219,7 +218,7 @@ export default async function getNavigator(workerScope) {
 					)
 				}
 
-				return `${language} ${languages}`
+				return languages ? `${languages.join(', ')} (${language})` : `${language} ${languages}`
 			}, 'language(s) failed'),
 			maxTouchPoints: attempt(() => {
 				if (!('maxTouchPoints' in navigator)) {
@@ -368,7 +367,7 @@ export default async function getNavigator(workerScope) {
 					}
 					acc[state] = [name]
 					return acc
-				}, {})).catch((error) => console.error(error))
+				}, {})).catch((error) => captureError(error, 'permissions failed'))
 			return permissions
 		}, 'permissions failed')
 
@@ -430,7 +429,7 @@ export default async function getNavigator(workerScope) {
 				lied,
 			}
 		}).catch((error) => {
-			console.error(error)
+			captureError(error, 'async navigator signals failed')
 			logTestResult({ time: timer.stop(), test: 'navigator', passed: true })
 			return {
 				...data,
