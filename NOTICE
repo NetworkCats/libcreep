@@ -1,0 +1,13 @@
+libcreep contains a TypeScript library adaptation of Creep.js.
+
+libcreep modifications copyright (c) 2026 Networkcats.
+Creep.js portions copyright (c) 2021 abrahamjuliot.
+Both are licensed under the MIT License included in LICENSE.
+Upstream project: https://github.com/abrahamjuliot/CreepJS
+
+The CreepJS name and logos are governed by the upstream project's trademark
+policy:
+https://github.com/abrahamjuliot/CreepJS/blob/master/TRADEMARKS.md
+
+This package uses the distinct name "libcreep" and does not claim to be an
+official CreepJS distribution.
