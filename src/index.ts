@@ -62,11 +62,6 @@ function rejectWhenAborted<T>(
       if (cleanup()) reject(getAbortReason(signal));
     };
 
-    signal.addEventListener('abort', abort, { once: true });
-    if (signal.aborted) {
-      abort();
-      return;
-    }
     void operation.then(
       (value) => {
         if (cleanup()) resolve(value);
@@ -75,6 +70,8 @@ function rejectWhenAborted<T>(
         if (cleanup()) reject(error);
       },
     );
+    signal.addEventListener('abort', abort, { once: true });
+    if (signal.aborted) abort();
   });
 }
 

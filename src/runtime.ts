@@ -99,6 +99,41 @@ function throwIfAborted(signal?: AbortSignal): void {
   );
 }
 
+function rejectWhenAborted<T>(
+  operation: Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  if (signal === undefined) return operation;
+
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const cleanup = (): boolean => {
+      if (settled) return false;
+      settled = true;
+      signal.removeEventListener('abort', abort);
+      return true;
+    };
+    const abort = (): void => {
+      if (!cleanup()) return;
+      reject(
+        signal.reason ??
+          new DOMException('Fingerprint collection was aborted.', 'AbortError'),
+      );
+    };
+
+    void operation.then(
+      (value) => {
+        if (cleanup()) resolve(value);
+      },
+      (error: unknown) => {
+        if (cleanup()) reject(error);
+      },
+    );
+    signal.addEventListener('abort', abort, { once: true });
+    if (signal.aborted) abort();
+  });
+}
+
 function isCancellation(_error: unknown, signal?: AbortSignal): boolean {
   return signal?.aborted === true;
 }
@@ -153,7 +188,10 @@ async function runProbe(
   const start = now();
   try {
     throwIfAborted(signal);
-    const value = await detector();
+    const value = await rejectWhenAborted(
+      Promise.resolve().then(detector),
+      signal,
+    );
     throwIfAborted(signal);
     const duration = now() - start;
     results[name] =
@@ -230,7 +268,10 @@ async function runAuxiliary<T>(
   const start = now();
   try {
     throwIfAborted(signal);
-    const value = await detector();
+    const value = await rejectWhenAborted(
+      Promise.resolve().then(detector),
+      signal,
+    );
     throwIfAborted(signal);
     const duration = now() - start;
     return value === undefined || value === null
@@ -252,7 +293,7 @@ async function collectAuxiliary(
 ): Promise<AuxiliaryResults> {
   const [mediaDevices, status, mediaCapabilities, webRTC] = await Promise.all([
     runAuxiliary(getWebRTCDevices, signal),
-    runAuxiliary(getStatus, signal),
+    runAuxiliary(() => getStatus(signal), signal),
     runAuxiliary(getMediaCapabilities, signal),
     includeWebRTC
       ? runAuxiliary(() => getWebRTCData(signal), signal)
@@ -681,7 +722,9 @@ export async function collectFingerprint(
 
   try {
     throwIfAborted(signal);
-    const isBrave = IS_BLINK ? await braveBrowser() : false;
+    const isBrave = IS_BLINK
+      ? await rejectWhenAborted(Promise.resolve(braveBrowser()), signal)
+      : false;
     throwIfAborted(signal);
     const braveMode: { standard?: boolean; strict?: boolean } = isBrave
       ? getBraveMode()
@@ -747,9 +790,9 @@ export async function collectFingerprint(
       signal,
     );
 
-    const { components: collectedValues, hashes } = await enrichComponents(
-      results,
-      braveFingerprintingBlocking,
+    const { components: collectedValues, hashes } = await rejectWhenAborted(
+      enrichComponents(results, braveFingerprintingBlocking),
+      signal,
     );
     throwIfAborted(signal);
     const values = snapshot(collectedValues);
@@ -766,18 +809,21 @@ export async function collectFingerprint(
       braveFingerprintingBlocking,
     );
     const auxiliary = snapshot(await auxiliaryPromise);
-    const [rawVisitorId, visitorId, fuzzyHash, bot] = await Promise.all([
-      hashComponents(
-        components as unknown as Readonly<
-          Record<string, ComponentResult<unknown>>
-        >,
-      ),
-      hashValue(stableComponents),
-      getFuzzyHash(values),
-      Promise.resolve(
-        getBotHash(values, { computeWindowsRelease, getFeaturesLie }),
-      ),
-    ]);
+    const [rawVisitorId, visitorId, fuzzyHash, bot] = await rejectWhenAborted(
+      Promise.all([
+        hashComponents(
+          components as unknown as Readonly<
+            Record<string, ComponentResult<unknown>>
+          >,
+        ),
+        hashValue(stableComponents),
+        getFuzzyHash(values),
+        Promise.resolve(
+          getBotHash(values, { computeWindowsRelease, getFeaturesLie }),
+        ),
+      ]),
+      signal,
+    );
     throwIfAborted(signal);
 
     return {

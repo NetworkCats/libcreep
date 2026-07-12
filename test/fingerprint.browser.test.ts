@@ -146,6 +146,26 @@ describe('frontend API', () => {
       agent.get({ includeWebRTC: true, timeoutMs: 1 }),
     ).rejects.toMatchObject({ name: 'TimeoutError' });
   });
+
+  it('enforces timeout when an auxiliary browser promise never settles', async () => {
+    const nativeFetch = window.fetch;
+    window.fetch = (() => new Promise<Response>(() => {})) as typeof fetch;
+    const agent = await load({
+      worker: { strategy: 'auto', url: '/dist/worker.js' },
+    });
+
+    try {
+      await expect(agent.get({ timeoutMs: 25 })).rejects.toMatchObject({
+        name: 'TimeoutError',
+      });
+    } finally {
+      window.fetch = nativeFetch;
+    }
+
+    await expect(agent.get({ timeoutMs: 10_000 })).resolves.toMatchObject({
+      visitorId: expect.stringMatching(/^[a-f\d]{64}$/),
+    });
+  });
 });
 
 const upstreamCoverage: ReadonlyArray<

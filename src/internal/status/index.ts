@@ -108,7 +108,7 @@ export async function getStorage(): Promise<number | null> {
   ]).then(([quota1, quota2]) => quota2 ?? quota1)
 }
 
-async function getScriptSize(): Promise<number | null> {
+async function getScriptSize(signal?: AbortSignal): Promise<number | null> {
   let url = null
   try {
     // @ts-expect-error if unsupported
@@ -116,7 +116,7 @@ async function getScriptSize(): Promise<number | null> {
   } catch (err) { }
 
   if (!url) return null
-  return fetch(url)
+  return fetch(url, { signal })
     .then((res) => res.blob())
     .then((blob) => blob.size)
     .catch(() => null)
@@ -144,7 +144,7 @@ interface Status {
     scripts: string[]
     scriptSize: number | null
 }
-export async function getStatus(): Promise<Status> {
+export async function getStatus(signal?: AbortSignal): Promise<Status> {
   const [
     batteryInfo,
     quotaA,
@@ -157,7 +157,7 @@ export async function getStatus(): Promise<Status> {
     getBattery(),
     getStorage(),
     getStorage(),
-    getScriptSize(),
+    getScriptSize(signal),
     getMaxCallStackSize(),
     getTimingResolution(),
     [...new Set([...getClientLitter(), ...getClientCode()])].sort().slice(0, 50),

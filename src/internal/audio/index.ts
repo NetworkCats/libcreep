@@ -78,7 +78,9 @@ async function hasFakeAudio(signal?: AbortSignal) {
 			return error ? reject(error) : resolve(value)
 		}
 		const abort = () => {
-			void context.suspend(0).catch(() => undefined)
+			try {
+				void context.suspend?.(0)?.catch(() => undefined)
+			} catch (error) { }
 			return finish(undefined, signal.reason || new DOMException('Audio detection was aborted.', 'AbortError'))
 		}
 		signal?.addEventListener('abort', abort, { once: true })
@@ -182,7 +184,9 @@ export default async function getOfflineAudioContext(signal?: AbortSignal) {
 				return error ? reject(error) : resolve(value)
 			}
 			const abort = () => {
-				void context.suspend(0).catch(() => undefined)
+				try {
+					void context.suspend?.(0)?.catch(() => undefined)
+				} catch (error) { }
 				return finish(undefined, signal.reason || new DOMException('Audio detection was aborted.', 'AbortError'))
 			}
 
