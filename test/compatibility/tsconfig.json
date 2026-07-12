@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "lib": ["DOM", "ES2022"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "noEmit": true,
+    "strict": true,
+    "skipLibCheck": false,
+    "types": []
+  },
+  "files": ["typescript-consumer.ts"]
+}

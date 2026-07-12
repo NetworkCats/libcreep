@@ -26,16 +26,18 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "oxlint --deny-warnings src/index.ts src/internal/debug/profile.ts src/runtime.ts src/types.ts src/worker.ts test/*.ts",
-    "test": "npm run test:unit && npm run test:browser",
+    "test": "npm run test:unit && npm run test:browser && npm run test:node-compat && npm run test:types:consumer",
     "test:unit": "vitest run --project unit",
     "test:browser": "npm run build && vitest run --project browser",
+    "test:node-compat": "node scripts/check-node-compatibility.mjs",
+    "test:types:consumer": "tsc -p test/compatibility/tsconfig.json",
     "test:coverage": "npm run build && vitest run --coverage",
     "test:speed": "npm run build && vitest run --config vitest.speed.config.ts",
     "typecheck": "tsc -p tsconfig.json",
     "validate": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run build && publint && attw --pack --profile esm-only"
   },
   "engines": {
-    "node": ">=26.5.0"
+    "node": ">=22.12.0"
   },
   "keywords": [
     "browser",

@@ -10,6 +10,10 @@ collection.
 npm install libcreep
 ```
 
+`libcreep` supports Node.js 22.12 and newer. Its published declarations support
+TypeScript 5.9 and newer. The runtime code runs in the browser; importing it in
+Node.js is safe, but fingerprint collection requires a browser window.
+
 ## Usage
 
 ```ts

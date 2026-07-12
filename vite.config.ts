@@ -21,7 +21,7 @@ export default defineConfig({
     },
     minify: false,
     sourcemap: true,
-    target: 'es2024',
+    target: 'es2022',
     rollupOptions: {
       output: {
         chunkFileNames: '[name].js',
