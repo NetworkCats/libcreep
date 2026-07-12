@@ -23,6 +23,16 @@ const productionFiles = (
   await getFiles(fileURLToPath(new URL('../dist', import.meta.url)))
 ).filter((path) => ['.js', '.map'].includes(extname(path)));
 
+const publicEntryPath = fileURLToPath(
+  new URL('../dist/index.js', import.meta.url),
+);
+const publicEntry = await readFile(publicEntryPath, 'utf8');
+if (!/new URL\(["']\.\/worker\.js["']/.test(publicEntry)) {
+  throw new Error(
+    'Production output does not reference the packaged dist/worker.js entry',
+  );
+}
+
 for (const path of productionFiles) {
   const contents = await readFile(path, 'utf8');
   const marker = forbiddenMarkers.find((candidate) =>

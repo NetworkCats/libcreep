@@ -122,6 +122,14 @@ async function waitForDocumentBody(): Promise<void> {
   });
 }
 
+function getDefaultWorkerUrl(): string {
+  // Keep the worker entry external. Passing import.meta.url directly to
+  // new URL() makes Vite treat worker.js as a source asset and inline the
+  // unbuilt TypeScript entry instead of referencing dist/worker.js.
+  const moduleUrl = import.meta.url;
+  return new URL('./worker.js', moduleUrl).href;
+}
+
 /** Reports whether the current environment is a browser window. */
 export function isBrowserEnvironment(): boolean {
   return typeof window !== 'undefined' && typeof document !== 'undefined';
@@ -156,9 +164,7 @@ export async function load(
   await waitForDocumentBody();
 
   const runtime = (await import('./runtime.js')) as RuntimeModule;
-  const workerUrl = String(
-    options.worker?.url ?? new URL('./worker.js', import.meta.url),
-  );
+  const workerUrl = String(options.worker?.url ?? getDefaultWorkerUrl());
   const workerStrategy = options.worker?.strategy ?? 'auto';
   const debug = options.debug ?? false;
   return {

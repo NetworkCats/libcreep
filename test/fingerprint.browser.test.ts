@@ -71,6 +71,17 @@ describe('frontend API', () => {
     );
   });
 
+  it('loads the packaged worker without a URL override', async () => {
+    const productionEntry = '/dist/index.js';
+    const productionModule = (await import(
+      /* @vite-ignore */ productionEntry
+    )) as typeof import('../src/index.js');
+    const agent = await productionModule.load();
+    const defaultWorkerResult = await agent.get({ timeoutMs: 10_000 });
+
+    expect(defaultWorkerResult.components.workerScope.status).toBe('fulfilled');
+  });
+
   it('isolates detector AbortErrors that are not collection cancellation', async () => {
     const createOffer = RTCPeerConnection.prototype.createOffer;
     RTCPeerConnection.prototype.createOffer = (() =>
