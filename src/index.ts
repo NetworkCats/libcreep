@@ -9,6 +9,8 @@ import type {
 } from './types.js';
 import { ALGORITHM_VERSION, VERSION } from './version.js';
 
+declare const __LIBCREEP_DEBUG__: boolean;
+
 export { componentsToDebugString, hashComponents } from './hash.js';
 export {
   AUXILIARY_DETECTION_NAMES,
@@ -119,6 +121,12 @@ export async function load(
                 result.components,
               )}`,
             );
+            if (__LIBCREEP_DEBUG__) {
+              void import('./internal/debug/profile.js').then(
+                ({ printSpeedProfile }) => printSpeedProfile(result),
+                () => undefined,
+              );
+            }
           },
           () => undefined,
         );

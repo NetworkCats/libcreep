@@ -21,15 +21,16 @@
     "README.md"
   ],
   "scripts": {
-    "build": "npm run clean && vite build && tsc -p tsconfig.build.json",
+    "build": "npm run clean && vite build && tsc -p tsconfig.build.json && rm -rf dist/internal/debug && node scripts/check-production-bundle.mjs",
     "clean": "rm -rf dist coverage test-results playwright-report",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "lint": "oxlint --deny-warnings src/index.ts src/runtime.ts src/types.ts src/worker.ts test/*.ts",
+    "lint": "oxlint --deny-warnings src/index.ts src/internal/debug/profile.ts src/runtime.ts src/types.ts src/worker.ts test/*.ts",
     "test": "npm run test:unit && npm run test:browser",
     "test:unit": "vitest run --project unit",
     "test:browser": "npm run build && vitest run --project browser",
     "test:coverage": "npm run build && vitest run --coverage",
+    "test:speed": "npm run build && vitest run --config vitest.speed.config.ts",
     "typecheck": "tsc -p tsconfig.json",
     "validate": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run build && publint && attw --pack"
   },

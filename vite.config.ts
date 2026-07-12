@@ -6,6 +6,7 @@ const algorithmVersion = packageJson.fingerprintAlgorithmVersion;
 
 export default defineConfig({
   define: {
+    __LIBCREEP_DEBUG__: 'false',
     __LIBCREEP_ALGORITHM_VERSION__: JSON.stringify(algorithmVersion),
     __LIBCREEP_PACKAGE_VERSION__: JSON.stringify(packageJson.version),
   },

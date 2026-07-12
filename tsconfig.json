@@ -22,7 +22,8 @@
     "src/**/*.ts",
     "test/**/*.ts",
     "vite.config.ts",
-    "vitest.config.ts"
+    "vitest.config.ts",
+    "vitest.speed.config.ts"
   ],
   "exclude": ["src/internal"]
 }

@@ -34,7 +34,10 @@ interface LoadOptions {
 ```
 
 `debug` prints the algorithm/package versions and formatted component results
-after successful collection. It is disabled by default.
+after successful collection. Development/test builds also print ranked core,
+auxiliary, and aggregate speed tables. The detailed profiler is compile-time
+disabled and absent from production output. Debug output is disabled by
+default.
 
 The default `auto` worker strategy tries a shared worker and then a dedicated
 worker. `shared-first` currently has the same order but explicitly fixes that

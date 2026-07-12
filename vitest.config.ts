@@ -7,6 +7,7 @@ const algorithmVersion = packageJson.fingerprintAlgorithmVersion;
 
 export default defineConfig({
   define: {
+    __LIBCREEP_DEBUG__: 'true',
     __LIBCREEP_ALGORITHM_VERSION__: JSON.stringify(algorithmVersion),
     __LIBCREEP_PACKAGE_VERSION__: JSON.stringify(packageJson.version),
   },
@@ -25,6 +26,7 @@ export default defineConfig({
     projects: [
       {
         define: {
+          __LIBCREEP_DEBUG__: 'true',
           __LIBCREEP_ALGORITHM_VERSION__: JSON.stringify(algorithmVersion),
           __LIBCREEP_PACKAGE_VERSION__: JSON.stringify(packageJson.version),
         },
@@ -36,6 +38,7 @@ export default defineConfig({
       },
       {
         define: {
+          __LIBCREEP_DEBUG__: 'true',
           __LIBCREEP_ALGORITHM_VERSION__: JSON.stringify(algorithmVersion),
           __LIBCREEP_PACKAGE_VERSION__: JSON.stringify(packageJson.version),
         },
