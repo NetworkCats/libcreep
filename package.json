@@ -1,6 +1,6 @@
 {
   "name": "libcreep",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "fingerprintAlgorithmVersion": "4",
   "description": "A browser-only fingerprinting library based on the Creep.js detection suite",
   "repository": {
