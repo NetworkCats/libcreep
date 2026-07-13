@@ -23,14 +23,9 @@ npm install libcreep
 import { load } from 'libcreep';
 
 const collector = await load();
-const result = await collector.collect({ timeoutMs: 10_000 });
+const result = await collector.collect();
 
 console.log(result.visitorId);
-
-const canvas = result.components.canvas2d;
-if (canvas.status === 'fulfilled') {
-  console.log(canvas.value.$hash);
-}
 ```
 
 For one-shot collection:
