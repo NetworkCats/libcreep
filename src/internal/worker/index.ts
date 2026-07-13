@@ -368,7 +368,7 @@ export default async function getBestWorkerScope(
 		})
 
 		const workerOrder = strategy == 'service-first' ? ['service', 'shared', 'dedicated'] :
-			strategy == 'dedicated' ? ['dedicated'] : ['shared', 'dedicated']
+			strategy == 'dedicated-only' ? ['dedicated'] : ['shared', 'dedicated']
 		let workerScope
 		for (const workerType of workerOrder) {
 			throwIfAborted()

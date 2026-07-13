@@ -4,7 +4,7 @@ import {
   ALGORITHM_VERSION,
   collect,
   load,
-  VERSION,
+  LIBRARY_VERSION,
   type FingerprintResult,
 } from '../src/index.js';
 import { collectFingerprint } from '../src/runtime.js';
@@ -33,7 +33,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('fingerprint agent orchestration', () => {
+describe('fingerprint collector orchestration', () => {
   it('forwards worker and collection options and serializes concurrent calls', async () => {
     let resolveFirst!: (result: FingerprintResult) => void;
     mockedCollectFingerprint
@@ -45,19 +45,19 @@ describe('fingerprint agent orchestration', () => {
       )
       .mockResolvedValueOnce(fingerprint);
     const workerUrl = new URL('https://cdn.example.test/libcreep-worker.js');
-    const agent = await load({
-      worker: { strategy: 'dedicated', url: workerUrl },
+    const collector = await load({
+      worker: { strategy: 'dedicated-only', url: workerUrl },
     });
 
-    const first = agent.get({ includeWebRTC: true });
-    const second = agent.get({ timeoutMs: 250 });
+    const first = collector.collect({ includeWebRtc: true });
+    const second = collector.collect({ timeoutMs: 250 });
 
     await vi.waitFor(() =>
       expect(mockedCollectFingerprint).toHaveBeenCalledOnce(),
     );
     expect(mockedCollectFingerprint).toHaveBeenNthCalledWith(1, {
-      includeWebRTC: true,
-      workerStrategy: 'dedicated',
+      includeWebRtc: true,
+      workerStrategy: 'dedicated-only',
       workerUrl: workerUrl.href,
     });
 
@@ -66,28 +66,28 @@ describe('fingerprint agent orchestration', () => {
     await expect(second).resolves.toBe(fingerprint);
     expect(mockedCollectFingerprint).toHaveBeenNthCalledWith(2, {
       timeoutMs: 250,
-      workerStrategy: 'dedicated',
+      workerStrategy: 'dedicated-only',
       workerUrl: workerUrl.href,
     });
-    expect(agent.version).toBe(VERSION);
-    expect(agent.algorithmVersion).toBe(ALGORITHM_VERSION);
+    expect(collector.libraryVersion).toBe(LIBRARY_VERSION);
+    expect(collector.algorithmVersion).toBe(ALGORITHM_VERSION);
   });
 
   it('continues the queue after a failed collection', async () => {
     mockedCollectFingerprint
       .mockRejectedValueOnce(new Error('first collection failed'))
       .mockResolvedValueOnce(fingerprint);
-    const agent = await load();
+    const collector = await load();
 
-    const first = agent.get();
-    const second = agent.get();
+    const first = collector.collect();
+    const second = collector.collect();
 
     await expect(first).rejects.toThrow('first collection failed');
     await expect(second).resolves.toBe(fingerprint);
     expect(mockedCollectFingerprint).toHaveBeenCalledTimes(2);
   });
 
-  it('serializes collections across separate agents', async () => {
+  it('serializes collections across separate collectors', async () => {
     let resolveFirst!: (result: FingerprintResult) => void;
     mockedCollectFingerprint
       .mockImplementationOnce(
@@ -97,11 +97,11 @@ describe('fingerprint agent orchestration', () => {
           }),
       )
       .mockResolvedValueOnce(fingerprint);
-    const firstAgent = await load();
-    const secondAgent = await load();
+    const firstCollector = await load();
+    const secondCollector = await load();
 
-    const first = firstAgent.get();
-    const second = secondAgent.get();
+    const first = firstCollector.collect();
+    const second = secondCollector.collect();
     await vi.waitFor(() =>
       expect(mockedCollectFingerprint).toHaveBeenCalledOnce(),
     );
@@ -120,12 +120,12 @@ describe('fingerprint agent orchestration', () => {
           resolveFirst = resolve;
         }),
     );
-    const firstAgent = await load();
-    const secondAgent = await load();
+    const firstCollector = await load();
+    const secondCollector = await load();
     const controller = new AbortController();
 
-    const first = firstAgent.get();
-    const second = secondAgent.get({ signal: controller.signal });
+    const first = firstCollector.collect();
+    const second = secondCollector.collect({ signal: controller.signal });
     await vi.waitFor(() =>
       expect(mockedCollectFingerprint).toHaveBeenCalledOnce(),
     );
@@ -144,12 +144,12 @@ describe('fingerprint agent orchestration', () => {
     const debug = vi
       .spyOn(console, 'debug')
       .mockImplementation(() => undefined);
-    const agent = await load({ debug: true });
+    const collector = await load({ debug: true });
 
-    await expect(agent.get()).resolves.toBe(fingerprint);
+    await expect(collector.collect()).resolves.toBe(fingerprint);
     await vi.waitFor(() => expect(debug).toHaveBeenCalledOnce());
     expect(debug.mock.calls[0]?.[0]).toContain(
-      `[libcreep ${VERSION}; algorithm ${ALGORITHM_VERSION}]`,
+      `[libcreep ${LIBRARY_VERSION}; algorithm ${ALGORITHM_VERSION}]`,
     );
     expect(debug.mock.calls[0]?.[0]).toContain('\n{}');
   });
@@ -159,9 +159,9 @@ describe('fingerprint agent orchestration', () => {
     const debug = vi
       .spyOn(console, 'debug')
       .mockImplementation(() => undefined);
-    const agent = await load({ debug: true });
+    const collector = await load({ debug: true });
 
-    await expect(agent.get()).rejects.toThrow('probe failed');
+    await expect(collector.collect()).rejects.toThrow('probe failed');
     await Promise.resolve();
     expect(debug).not.toHaveBeenCalled();
   });
@@ -173,22 +173,33 @@ describe('fingerprint agent orchestration', () => {
     await expect(
       collect({
         debug: false,
-        includeWebRTC: true,
+        includeWebRtc: true,
         signal,
         timeoutMs: 500,
         worker: {
-          strategy: 'shared-first',
+          strategy: 'service-first',
           url: 'https://cdn.example.test/worker.js',
         },
       }),
     ).resolves.toBe(fingerprint);
     expect(mockedCollectFingerprint).toHaveBeenCalledWith({
-      includeWebRTC: true,
+      includeWebRtc: true,
       signal,
       timeoutMs: 500,
-      workerStrategy: 'shared-first',
+      workerStrategy: 'service-first',
       workerUrl: 'https://cdn.example.test/worker.js',
     });
+  });
+
+  it('rejects unknown worker strategies instead of silently using auto', async () => {
+    await expect(
+      load({
+        worker: {
+          strategy: 'typo' as 'auto',
+        },
+      }),
+    ).rejects.toThrow('Unknown worker strategy: typo');
+    expect(mockedCollectFingerprint).not.toHaveBeenCalled();
   });
 
   it('waits for DOMContentLoaded when the document body is not ready', async () => {
@@ -209,9 +220,9 @@ describe('fingerprint agent orchestration', () => {
     });
 
     let settled = false;
-    const loading = load().then((agent) => {
+    const loading = load().then((collector) => {
       settled = true;
-      return agent;
+      return collector;
     });
     await Promise.resolve();
 
@@ -221,7 +232,7 @@ describe('fingerprint agent orchestration', () => {
     onReady?.();
     await expect(loading).resolves.toMatchObject({
       algorithmVersion: ALGORITHM_VERSION,
-      version: VERSION,
+      libraryVersion: LIBRARY_VERSION,
     });
   });
 
@@ -253,7 +264,7 @@ describe('fingerprint agent orchestration', () => {
 
     await expect(load()).resolves.toMatchObject({
       algorithmVersion: ALGORITHM_VERSION,
-      version: VERSION,
+      libraryVersion: LIBRARY_VERSION,
     });
     expect(disconnect).toHaveBeenCalledOnce();
   });

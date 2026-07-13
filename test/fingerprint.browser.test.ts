@@ -3,40 +3,60 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import {
   ALGORITHM_VERSION,
   componentsToDebugString,
-  DETECTION_NAMES,
+  CORE_COMPONENT_NAMES,
   hashComponents,
-  isSupported,
+  isFingerprintingSupported,
   load,
-  VERSION,
+  LIBRARY_VERSION,
   type FingerprintResult,
 } from '../src/index.js';
+import { buildFocusedHashes } from '../src/runtime.js';
 
 let result: FingerprintResult;
-let webRTCResult: FingerprintResult;
+let webRtcResult: FingerprintResult;
 
 beforeAll(async () => {
-  const agent = await load({
+  const collector = await load({
     worker: { strategy: 'auto', url: '/dist/worker.js' },
   });
-  result = await agent.get();
-  webRTCResult = await agent.get({ includeWebRTC: true });
+  result = await collector.collect();
+  webRtcResult = await collector.collect({ includeWebRtc: true });
 });
 
 describe('frontend API', () => {
   it('collects stable, raw, fuzzy, and bot fingerprints', () => {
-    expect(isSupported()).toBe(true);
+    expect(isFingerprintingSupported()).toBe(true);
     expect(result.visitorId).toMatch(/^[a-f\d]{64}$/);
     expect(result.rawVisitorId).toMatch(/^[a-f\d]{64}$/);
     expect(result.fuzzyHash).toMatch(/^[a-f\d0]{64}$/);
-    expect(result.bot.botHash).toMatch(/^[01]{8}$/);
-    expect(result.duration).toBeGreaterThan(0);
-    expect(result.version).toBe(ALGORITHM_VERSION);
-    expect(result.libraryVersion).toBe(VERSION);
+    expect(result.bot.botMask).toMatch(/^[01]{8}$/);
+    expect(result.durationMs).toBeGreaterThan(0);
+    expect(result.algorithmVersion).toBe(ALGORITHM_VERSION);
+    expect(result.libraryVersion).toBe(LIBRARY_VERSION);
+    expect(result.stableComponents).not.toHaveProperty('forceRenew');
+    expect(Object.keys(result.focusedHashes)).toEqual(
+      expect.arrayContaining([
+        'canvas2dEmoji',
+        'canvas2dImage',
+        'canvas2dPaint',
+        'canvas2dText',
+        'clientRects',
+        'cssComputedStyle',
+        'cssSystem',
+        'deviceAndTimezone',
+        'mediaMimeTypes',
+      ]),
+    );
+    expect(
+      Object.values(result.focusedHashes).every(
+        (hash) => typeof hash === 'string' && /^[a-f\d]{64}$/.test(hash),
+      ),
+    ).toBe(true);
   });
 
   it('settles every upstream detection independently', () => {
     expect(Object.keys(result.components).sort()).toEqual(
-      [...DETECTION_NAMES].sort(),
+      [...CORE_COMPONENT_NAMES].sort(),
     );
     const rejected = Object.entries(result.components).filter(
       ([, component]) => component.status === 'rejected',
@@ -48,21 +68,21 @@ describe('frontend API', () => {
     expect(result.auxiliary.mediaDevices.status).not.toBe('skipped');
     expect(result.auxiliary.mediaCapabilities.status).not.toBe('skipped');
     expect(result.auxiliary.status.status).not.toBe('skipped');
-    expect(result.auxiliary.webRTC.status).toBe('skipped');
+    expect(result.auxiliary.webRtc.status).toBe('skipped');
   });
 
   it('collects network-revealing WebRTC signals only when requested', () => {
-    expect(webRTCResult.auxiliary.webRTC.status).not.toBe('skipped');
+    expect(webRtcResult.auxiliary.webRtc.status).not.toBe('skipped');
   });
 
   it('keeps navigator signals when the worker is unavailable', async () => {
-    const agent = await load({
+    const collector = await load({
       worker: {
-        strategy: 'dedicated',
+        strategy: 'dedicated-only',
         url: '/missing-libcreep-worker.js',
       },
     });
-    const noWorkerResult = await agent.get();
+    const noWorkerResult = await collector.collect();
 
     expect(noWorkerResult.components.workerScope.status).toBe('unsupported');
     expect(noWorkerResult.values.navigator?.platform).toBe(navigator.platform);
@@ -71,13 +91,23 @@ describe('frontend API', () => {
     );
   });
 
+  it('omits focused hashes whose source component is unavailable', async () => {
+    await expect(buildFocusedHashes({})).resolves.toEqual({});
+
+    const presentUndefined = await buildFocusedHashes({
+      media: { mimeTypes: undefined },
+    });
+    expect(presentUndefined.mediaMimeTypes).toMatch(/^[a-f\d]{64}$/);
+    expect(presentUndefined).not.toHaveProperty('cssSystem');
+  });
+
   it('loads the packaged worker without a URL override', async () => {
     const productionEntry = '/dist/index.js';
     const productionModule = (await import(
       /* @vite-ignore */ productionEntry
     )) as typeof import('../src/index.js');
-    const agent = await productionModule.load();
-    const defaultWorkerResult = await agent.get({ timeoutMs: 10_000 });
+    const collector = await productionModule.load();
+    const defaultWorkerResult = await collector.collect({ timeoutMs: 10_000 });
 
     expect(defaultWorkerResult.components.workerScope.status).toBe('fulfilled');
   });
@@ -90,11 +120,11 @@ describe('frontend API', () => {
       )) as unknown as typeof createOffer;
 
     try {
-      const agent = await load({
+      const collector = await load({
         worker: { strategy: 'auto', url: '/dist/worker.js' },
       });
-      const isolatedResult = await agent.get({ includeWebRTC: true });
-      expect(isolatedResult.auxiliary.webRTC.status).toBe('rejected');
+      const isolatedResult = await collector.collect({ includeWebRtc: true });
+      expect(isolatedResult.auxiliary.webRtc.status).toBe('rejected');
     } finally {
       RTCPeerConnection.prototype.createOffer = createOffer;
     }
@@ -108,13 +138,15 @@ describe('frontend API', () => {
     });
 
     try {
-      const agent = await load({
+      const collector = await load({
         worker: {
           strategy: 'service-first',
           url: '/dist/worker.js',
         },
       });
-      const serviceWorkerResult = await agent.get({ timeoutMs: 10_000 });
+      const serviceWorkerResult = await collector.collect({
+        timeoutMs: 10_000,
+      });
       expect(serviceWorkerResult.components.workerScope.status).toBe(
         'fulfilled',
       );
@@ -137,50 +169,52 @@ describe('frontend API', () => {
   });
 
   it('does not accumulate detector records across repeated collection', () => {
-    expect(webRTCResult.values.capturedErrors).toEqual(
+    expect(webRtcResult.values.capturedErrors).toEqual(
       result.values.capturedErrors,
     );
-    expect(webRTCResult.values.lies).toEqual(result.values.lies);
-    expect(webRTCResult.values.trash).toEqual(result.values.trash);
+    expect(webRtcResult.values.lies).toEqual(result.values.lies);
+    expect(webRtcResult.values.trash).toEqual(result.values.trash);
   });
 
   it('cancels queued and active collection', async () => {
-    const agent = await load({
+    const collector = await load({
       worker: { strategy: 'auto', url: '/dist/worker.js' },
     });
     const controller = new AbortController();
     controller.abort();
     await expect(
-      agent.get({ signal: controller.signal }),
+      collector.collect({ signal: controller.signal }),
     ).rejects.toMatchObject({ name: 'AbortError' });
     await expect(
-      agent.get({ includeWebRTC: true, timeoutMs: 1 }),
+      collector.collect({ includeWebRtc: true, timeoutMs: 1 }),
     ).rejects.toMatchObject({ name: 'TimeoutError' });
   });
 
   it('enforces timeout when an auxiliary browser promise never settles', async () => {
     const nativeFetch = window.fetch;
     window.fetch = (() => new Promise<Response>(() => {})) as typeof fetch;
-    const agent = await load({
+    const collector = await load({
       worker: { strategy: 'auto', url: '/dist/worker.js' },
     });
 
     try {
-      await expect(agent.get({ timeoutMs: 25 })).rejects.toMatchObject({
+      await expect(collector.collect({ timeoutMs: 25 })).rejects.toMatchObject({
         name: 'TimeoutError',
       });
     } finally {
       window.fetch = nativeFetch;
     }
 
-    await expect(agent.get({ timeoutMs: 10_000 })).resolves.toMatchObject({
+    await expect(
+      collector.collect({ timeoutMs: 10_000 }),
+    ).resolves.toMatchObject({
       visitorId: expect.stringMatching(/^[a-f\d]{64}$/),
     });
   });
 });
 
 const upstreamCoverage: ReadonlyArray<
-  readonly [string, ReadonlyArray<(typeof DETECTION_NAMES)[number]>]
+  readonly [string, ReadonlyArray<(typeof CORE_COMPONENT_NAMES)[number]>]
 > = [
   ['workers', ['workerScope']],
   ['iframes', ['lies', 'headless']],
@@ -195,7 +229,7 @@ const upstreamCoverage: ReadonlyArray<
   ['extensions', ['resistance', 'features']],
 ];
 
-const optionallyUnsupported = new Set<(typeof DETECTION_NAMES)[number]>([
+const optionallyUnsupported = new Set<(typeof CORE_COMPONENT_NAMES)[number]>([
   'canvasWebgl',
 ]);
 

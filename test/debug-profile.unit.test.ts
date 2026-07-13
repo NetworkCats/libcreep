@@ -8,21 +8,21 @@ import type { FingerprintResult } from '../src/types.js';
 
 const result = {
   auxiliary: {
-    mediaCapabilities: { duration: 5, status: 'fulfilled', value: {} },
-    mediaDevices: { duration: 2, status: 'unsupported' },
-    status: { duration: 3, status: 'fulfilled', value: {} },
-    webRTC: { duration: 0, status: 'skipped' },
+    mediaCapabilities: { durationMs: 5, status: 'fulfilled', value: {} },
+    mediaDevices: { durationMs: 2, status: 'unsupported' },
+    status: { durationMs: 3, status: 'fulfilled', value: {} },
+    webRtc: { durationMs: 0, status: 'skipped' },
   },
   components: {
-    canvas2d: { duration: 20, status: 'fulfilled', value: {} },
-    fonts: { duration: 50, status: 'fulfilled', value: {} },
+    canvas2d: { durationMs: 20, status: 'fulfilled', value: {} },
+    fonts: { durationMs: 50, status: 'fulfilled', value: {} },
     voices: {
-      duration: 10,
+      durationMs: 10,
       error: { message: 'failed', name: 'Error' },
       status: 'rejected',
     },
   },
-  duration: 100,
+  durationMs: 100,
 } as unknown as FingerprintResult;
 
 describe('debug speed profiling', () => {
@@ -36,7 +36,7 @@ describe('debug speed profiling', () => {
         },
         { durationMs: 3, name: 'status', percentOfCollection: 3 },
         { durationMs: 2, name: 'mediaDevices', percentOfCollection: 2 },
-        { durationMs: 0, name: 'webRTC', percentOfCollection: 0 },
+        { durationMs: 0, name: 'webRtc', percentOfCollection: 0 },
       ],
       collectionDurationMs: 100,
       core: [

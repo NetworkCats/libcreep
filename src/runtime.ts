@@ -28,7 +28,11 @@ import { getStatus } from './internal/status/index.js';
 import getSVG from './internal/svg/index.js';
 import getTimezone from './internal/timezone/index.js';
 import { getTrash, trashBin } from './internal/trash/index.js';
-import { getBotHash, getFuzzyHash, hashify } from './internal/utils/crypto.js';
+import {
+  getBotDetection,
+  getFuzzyHash,
+  hashify,
+} from './internal/utils/crypto.js';
 import {
   braveBrowser,
   computeWindowsRelease,
@@ -46,27 +50,29 @@ import getWebRTCData, {
 import getWindowFeatures from './internal/window/index.js';
 import getBestWorkerScope from './internal/worker/index.js';
 import { hashComponents, hashValue } from './hash.js';
-import { ALGORITHM_VERSION, VERSION } from './version.js';
+import { ALGORITHM_VERSION, LIBRARY_VERSION } from './version.js';
 import {
-  DETECTION_NAMES,
-  type AuxiliaryResults,
-  type BotResult,
+  CORE_COMPONENT_NAMES,
+  type AuxiliaryComponentResults,
+  type BotDetectionResult,
   type ComponentResult,
-  type ComponentResults,
-  type DetectionError,
-  type DetectionName,
-  type FingerprintComponentValues,
-  type FingerprintHashes,
+  type ComponentError,
+  type CollectionOptions,
+  type CoreComponentName,
+  type CoreComponentResults,
+  type CoreComponentValues,
   type FingerprintResult,
-  type GetOptions,
+  type FocusedHashes,
   type StableFingerprint,
   type WorkerStrategy,
 } from './types.js';
 
 type UnknownRecord = Record<string, unknown>;
-type ProbeResults = Partial<Record<DetectionName, ComponentResult<unknown>>>;
+type ProbeResults = Partial<
+  Record<CoreComponentName, ComponentResult<unknown>>
+>;
 
-interface RuntimeOptions extends GetOptions {
+interface RuntimeOptions extends CollectionOptions {
   readonly workerStrategy: WorkerStrategy;
   readonly workerUrl: string;
 }
@@ -80,7 +86,15 @@ function now(): number {
   return performance.now();
 }
 
-function serializeError(error: unknown): DetectionError {
+function stringifySafely(value: unknown): string {
+  try {
+    return String(value);
+  } catch {
+    return 'Unknown error';
+  }
+}
+
+function serializeError(error: unknown): ComponentError {
   if (error instanceof Error) {
     return {
       message: error.message,
@@ -88,7 +102,7 @@ function serializeError(error: unknown): DetectionError {
       ...(error.stack === undefined ? {} : { stack: error.stack }),
     };
   }
-  return { message: String(error), name: 'Error' };
+  return { message: stringifySafely(error), name: 'Error' };
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -181,7 +195,7 @@ function createCollectionCancellation(
 
 async function runProbe(
   results: ProbeResults,
-  name: DetectionName,
+  name: CoreComponentName,
   detector: () => unknown | Promise<unknown>,
   signal?: AbortSignal,
 ): Promise<void> {
@@ -193,15 +207,15 @@ async function runProbe(
       signal,
     );
     throwIfAborted(signal);
-    const duration = now() - start;
+    const durationMs = now() - start;
     results[name] =
       value === undefined || value === null
-        ? { duration, status: 'unsupported' }
-        : { duration, status: 'fulfilled', value };
+        ? { durationMs, status: 'unsupported' }
+        : { durationMs, status: 'fulfilled', value };
   } catch (error) {
     if (isCancellation(error, signal)) throw error;
     results[name] = {
-      duration: now() - start,
+      durationMs: now() - start,
       error: serializeError(error),
       status: 'rejected',
     };
@@ -220,7 +234,7 @@ async function waitForProbes(
   throwIfAborted(signal);
 }
 
-function readProbe(results: ProbeResults, name: DetectionName): unknown {
+function readProbe(results: ProbeResults, name: CoreComponentName): unknown {
   const result = results[name];
   return result?.status === 'fulfilled' ? result.value : undefined;
 }
@@ -229,6 +243,19 @@ function asRecord(value: unknown): UnknownRecord {
   return value !== null && typeof value === 'object'
     ? (value as UnknownRecord)
     : {};
+}
+
+function hasOwn(record: UnknownRecord, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
+
+function hashRecordValue(
+  record: UnknownRecord,
+  key: string,
+): Promise<string | undefined> {
+  return hasOwn(record, key)
+    ? hashify(record[key])
+    : Promise.resolve(undefined);
 }
 
 function snapshot<T>(value: T): T {
@@ -273,14 +300,14 @@ async function runAuxiliary<T>(
       signal,
     );
     throwIfAborted(signal);
-    const duration = now() - start;
+    const durationMs = now() - start;
     return value === undefined || value === null
-      ? { duration, status: 'unsupported' }
-      : { duration, status: 'fulfilled', value };
+      ? { durationMs, status: 'unsupported' }
+      : { durationMs, status: 'fulfilled', value };
   } catch (error) {
     if (isCancellation(error, signal)) throw error;
     return {
-      duration: now() - start,
+      durationMs: now() - start,
       error: serializeError(error),
       status: 'rejected',
     };
@@ -288,17 +315,17 @@ async function runAuxiliary<T>(
 }
 
 async function collectAuxiliary(
-  includeWebRTC: boolean,
+  includeWebRtc: boolean,
   signal?: AbortSignal,
-): Promise<AuxiliaryResults> {
-  const [mediaDevices, status, mediaCapabilities, webRTC] = await Promise.all([
+): Promise<AuxiliaryComponentResults> {
+  const [mediaDevices, status, mediaCapabilities, webRtc] = await Promise.all([
     runAuxiliary(getWebRTCDevices, signal),
     runAuxiliary(() => getStatus(signal), signal),
     runAuxiliary(getMediaCapabilities, signal),
-    includeWebRTC
+    includeWebRtc
       ? runAuxiliary(() => getWebRTCData(signal), signal)
       : Promise.resolve({
-          duration: 0,
+          durationMs: 0,
           status: 'skipped',
         } as const),
   ]);
@@ -307,7 +334,7 @@ async function collectAuxiliary(
     mediaCapabilities,
     mediaDevices,
     status,
-    webRTC,
+    webRtc,
   };
 }
 
@@ -329,18 +356,13 @@ function getReducedGpuParameters(
   };
 }
 
-async function enrichComponents(
-  results: ProbeResults,
-  braveFingerprintingBlocking: boolean,
-): Promise<{
-  components: FingerprintComponentValues;
-  hashes: FingerprintHashes;
-}> {
-  const raw = Object.fromEntries(
-    DETECTION_NAMES.map((name) => [name, readProbe(results, name)]),
-  ) as Record<DetectionName, unknown>;
-  const webgl = asRecord(raw.canvasWebgl);
+/** @internal Builds hashes only for focused signal groups that are present. */
+export async function buildFocusedHashes(
+  raw: Readonly<Partial<Record<CoreComponentName, unknown>>>,
+  braveFingerprintingBlocking = false,
+): Promise<FocusedHashes> {
   const canvas2d = asRecord(raw.canvas2d);
+  const webgl = asRecord(raw.canvasWebgl);
   const css = asRecord(raw.css);
   const rects = asRecord(raw.clientRects);
   const media = asRecord(raw.media);
@@ -348,19 +370,75 @@ async function enrichComponents(
   const timezone = asRecord(raw.timezone);
   const navigatorData = asRecord(raw.navigator);
   const worker = asRecord(raw.workerScope);
-  const reducedGpuParameters = getReducedGpuParameters(
-    webgl,
-    braveFingerprintingBlocking,
-  );
+  const focusedHashCandidates: FocusedHashes = {
+    canvas2dEmoji: await hashRecordValue(canvas2d, 'emojiURI'),
+    canvas2dImage: await hashRecordValue(canvas2d, 'dataURI'),
+    canvas2dPaint: await hashRecordValue(canvas2d, 'paintURI'),
+    canvas2dText: await hashRecordValue(canvas2d, 'textURI'),
+    canvasWebglImage: await hashRecordValue(webgl, 'dataURI'),
+    canvasWebglParameters:
+      Object.keys(webgl).length === 0
+        ? undefined
+        : await hashify(
+            getReducedGpuParameters(webgl, braveFingerprintingBlocking),
+          ),
+    deviceAndTimezone: [
+      raw.cssMedia,
+      raw.navigator,
+      raw.screen,
+      raw.timezone,
+      raw.workerScope,
+    ].every((value) => value == null)
+      ? undefined
+      : await hashify(
+          getDeviceOfTimezoneData({
+            cssMedia: asRecord(raw.cssMedia),
+            navigatorData,
+            screen,
+            timezone,
+            worker,
+          }),
+        ),
+    clientRects:
+      Object.keys(rects).length === 0
+        ? undefined
+        : await hashify([
+            rects.elementBoundingClientRect,
+            rects.elementClientRects,
+            rects.rangeBoundingClientRect,
+            rects.rangeClientRects,
+          ]),
+    mediaMimeTypes: await hashRecordValue(media, 'mimeTypes'),
+    cssComputedStyle: await hashRecordValue(css, 'computedStyle'),
+    cssSystem: await hashRecordValue(css, 'system'),
+  };
+  return Object.fromEntries(
+    Object.entries(focusedHashCandidates).filter(
+      ([, hash]) => hash !== undefined,
+    ),
+  ) as FocusedHashes;
+}
 
-  const hashTargets: Partial<Record<DetectionName, unknown>> = {
+async function enrichComponents(
+  results: ProbeResults,
+  braveFingerprintingBlocking: boolean,
+): Promise<{
+  components: CoreComponentValues;
+  focusedHashes: FocusedHashes;
+}> {
+  const raw = Object.fromEntries(
+    CORE_COMPONENT_NAMES.map((name) => [name, readProbe(results, name)]),
+  ) as Record<CoreComponentName, unknown>;
+  const webgl = asRecord(raw.canvasWebgl);
+
+  const hashTargets: Partial<Record<CoreComponentName, unknown>> = {
     ...raw,
     htmlElementVersion: asRecord(raw.htmlElementVersion).keys,
     maths: asRecord(raw.maths).data,
     consoleErrors: asRecord(raw.consoleErrors).errors,
   };
   const componentHashEntries = await Promise.all(
-    DETECTION_NAMES.map(async (name) => {
+    CORE_COMPONENT_NAMES.map(async (name) => {
       const value = raw[name];
       return [
         name,
@@ -369,7 +447,7 @@ async function enrichComponents(
     }),
   );
   const componentHashes = Object.fromEntries(componentHashEntries) as Record<
-    DetectionName,
+    CoreComponentName,
     string | undefined
   >;
 
@@ -383,7 +461,7 @@ async function enrichComponents(
       : undefined;
 
   const components = Object.fromEntries(
-    DETECTION_NAMES.flatMap((name) => {
+    CORE_COMPONENT_NAMES.flatMap((name) => {
       const value = raw[name];
       const hash = componentHashes[name];
       if (value == null || hash === undefined) return [];
@@ -397,9 +475,9 @@ async function enrichComponents(
         ],
       ];
     }),
-  ) as FingerprintComponentValues;
+  ) as CoreComponentValues;
 
-  for (const name of DETECTION_NAMES) {
+  for (const name of CORE_COMPONENT_NAMES) {
     const result = results[name];
     const component = components[name];
     if (result?.status === 'fulfilled' && component !== undefined) {
@@ -407,34 +485,12 @@ async function enrichComponents(
     }
   }
 
-  const hashes: FingerprintHashes = {
-    canvas2dEmoji: await hashify(canvas2d.emojiURI),
-    canvas2dImage: await hashify(canvas2d.dataURI),
-    canvas2dPaint: await hashify(canvas2d.paintURI),
-    canvas2dText: await hashify(canvas2d.textURI),
-    canvasWebglImage: await hashify(webgl.dataURI),
-    canvasWebglParameters: await hashify(reducedGpuParameters),
-    deviceOfTimezone: await hashify(
-      getDeviceOfTimezoneData({
-        cssMedia: asRecord(raw.cssMedia),
-        navigatorData,
-        screen,
-        timezone,
-        worker,
-      }),
-    ),
-    domRect: await hashify([
-      rects.elementBoundingClientRect,
-      rects.elementClientRects,
-      rects.rangeBoundingClientRect,
-      rects.rangeClientRects,
-    ]),
-    mimeTypes: await hashify(media.mimeTypes),
-    style: await hashify(css.computedStyle),
-    styleSystem: await hashify(css.system),
-  };
+  const focusedHashes = await buildFocusedHashes(
+    raw,
+    braveFingerprintingBlocking,
+  );
 
-  return { components, hashes };
+  return { components, focusedHashes };
 }
 
 interface DeviceOfTimezoneInput {
@@ -493,7 +549,7 @@ function getDeviceOfTimezoneData(input: DeviceOfTimezoneInput): unknown[] {
 }
 
 function buildStableFingerprint(
-  components: FingerprintComponentValues,
+  components: CoreComponentValues,
   braveFingerprintingBlocking: boolean,
 ): StableFingerprint {
   const fp = components as Record<string, unknown>;
@@ -686,17 +742,16 @@ function buildStableFingerprint(
       Object.keys(fonts).length === 0 || fonts.lied || LowerEntropy.FONTS
         ? undefined
         : fonts.fontFaceLoadFonts,
-    forceRenew: 1737085481442,
   };
 
   return stable as StableFingerprint;
 }
 
-function completeResults(results: ProbeResults): ComponentResults {
-  for (const name of DETECTION_NAMES) {
-    results[name] ??= { duration: 0, status: 'unsupported' };
+function completeResults(results: ProbeResults): CoreComponentResults {
+  for (const name of CORE_COMPONENT_NAMES) {
+    results[name] ??= { durationMs: 0, status: 'unsupported' };
   }
-  return results as ComponentResults;
+  return results as CoreComponentResults;
 }
 
 export async function collectFingerprint(
@@ -711,12 +766,12 @@ export async function collectFingerprint(
   resetDetectorState();
   const { signal } = cancellation;
   const auxiliaryPromise = collectAuxiliary(
-    options.includeWebRTC ?? false,
+    options.includeWebRtc ?? false,
     signal,
   );
   void auxiliaryPromise.catch(() => undefined);
   const probe = (
-    name: DetectionName,
+    name: CoreComponentName,
     detector: () => unknown | Promise<unknown>,
   ): Promise<void> => runProbe(results, name, detector, signal);
 
@@ -790,13 +845,14 @@ export async function collectFingerprint(
       signal,
     );
 
-    const { components: collectedValues, hashes } = await rejectWhenAborted(
-      enrichComponents(results, braveFingerprintingBlocking),
-      signal,
-    );
+    const { components: collectedValues, focusedHashes } =
+      await rejectWhenAborted(
+        enrichComponents(results, braveFingerprintingBlocking),
+        signal,
+      );
     throwIfAborted(signal);
     const values = snapshot(collectedValues);
-    for (const name of DETECTION_NAMES) {
+    for (const name of CORE_COMPONENT_NAMES) {
       const component = results[name];
       const value = values[name];
       if (component?.status === 'fulfilled' && value !== undefined) {
@@ -816,10 +872,13 @@ export async function collectFingerprint(
             Record<string, ComponentResult<unknown>>
           >,
         ),
-        hashValue(stableComponents),
+        hashValue({
+          algorithmVersion: ALGORITHM_VERSION,
+          components: stableComponents,
+        }),
         getFuzzyHash(values),
         Promise.resolve(
-          getBotHash(values, { computeWindowsRelease, getFeaturesLie }),
+          getBotDetection(values, { computeWindowsRelease, getFeaturesLie }),
         ),
       ]),
       signal,
@@ -828,16 +887,16 @@ export async function collectFingerprint(
 
     return {
       auxiliary,
-      bot: bot as BotResult,
+      algorithmVersion: ALGORITHM_VERSION,
+      bot: bot as BotDetectionResult,
       components,
-      duration: now() - start,
+      durationMs: now() - start,
+      focusedHashes,
       fuzzyHash,
-      hashes,
-      libraryVersion: VERSION,
+      libraryVersion: LIBRARY_VERSION,
       rawVisitorId,
       stableComponents,
       values,
-      version: ALGORITHM_VERSION,
       visitorId,
     };
   } catch (error) {

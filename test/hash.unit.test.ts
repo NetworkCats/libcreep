@@ -21,19 +21,19 @@ describe('canonical component hashing', () => {
     const components = {
       missing: undefined,
       rejected: {
-        duration: 12,
+        durationMs: 12,
         error: { message: 'private detail', name: 'TypeError' },
         status: 'rejected',
       },
       value: {
-        duration: 7,
+        durationMs: 7,
         status: 'fulfilled',
         value: {
           z: undefined,
           a: [1, Number.NaN, Infinity, -Infinity, 2n],
         },
       },
-      unsupported: { duration: 3, status: 'unsupported' },
+      unsupported: { durationMs: 3, status: 'unsupported' },
     } as unknown as HashableComponents;
 
     const expectedPayload = {
@@ -62,20 +62,20 @@ describe('canonical component hashing', () => {
   it('ignores timing and error details but distinguishes result statuses', async () => {
     const first = {
       sample: {
-        duration: 1,
+        durationMs: 1,
         error: { message: 'first failure', name: 'Error' },
         status: 'rejected',
       },
     } as HashableComponents;
     const second = {
       sample: {
-        duration: 999,
+        durationMs: 999,
         error: { message: 'different failure', name: 'RangeError' },
         status: 'rejected',
       },
     } as HashableComponents;
     const skipped = {
-      sample: { duration: 1, status: 'skipped' },
+      sample: { durationMs: 1, status: 'skipped' },
     } as HashableComponents;
 
     await expect(hashComponents(first)).resolves.toBe(
@@ -88,10 +88,10 @@ describe('canonical component hashing', () => {
 
   it('distinguishes negative zero from positive zero', async () => {
     const negativeZero = {
-      sample: { duration: 1, status: 'fulfilled', value: -0 },
+      sample: { durationMs: 1, status: 'fulfilled', value: -0 },
     } as HashableComponents;
     const positiveZero = {
-      sample: { duration: 1, status: 'fulfilled', value: 0 },
+      sample: { durationMs: 1, status: 'fulfilled', value: 0 },
     } as HashableComponents;
 
     await expect(hashComponents(negativeZero)).resolves.toBe(
@@ -108,7 +108,7 @@ describe('canonical component hashing', () => {
     const error = new TypeError('bad component value');
     error.stack = 'fixture stack';
     const components = {
-      sample: { duration: 1, status: 'fulfilled', value: error },
+      sample: { durationMs: 1, status: 'fulfilled', value: error },
     } as HashableComponents;
 
     await expect(hashComponents(components)).resolves.toBe(
@@ -122,6 +122,77 @@ describe('canonical component hashing', () => {
         },
       }),
     );
+  });
+
+  it('rejects cyclic and unsupported values instead of hashing collisions', async () => {
+    const cyclic: { self?: unknown } = {};
+    cyclic.self = cyclic;
+
+    await expect(
+      hashComponents({
+        sample: {
+          durationMs: 1,
+          status: 'fulfilled',
+          value: cyclic,
+        },
+      }),
+    ).rejects.toThrow('Cannot hash cyclic values.');
+    await expect(
+      hashComponents({
+        sample: {
+          durationMs: 1,
+          status: 'fulfilled',
+          value: () => undefined,
+        },
+      }),
+    ).rejects.toThrow('Cannot hash function values.');
+    await expect(
+      hashComponents({
+        sample: {
+          durationMs: 1,
+          status: 'fulfilled',
+          value: new Date(0),
+        },
+      }),
+    ).rejects.toThrow('Cannot hash non-plain object values.');
+  });
+
+  it('rejects properties that canonical JSON would otherwise ignore', async () => {
+    const withExtraProperty = [1] as number[] & { label?: string };
+    withExtraProperty.label = 'ignored';
+    const withAccessor = {} as { value?: number };
+    Object.defineProperty(withAccessor, 'value', {
+      enumerable: true,
+      get: () => 1,
+    });
+    const withHiddenProperty = {} as { hidden?: number };
+    Object.defineProperty(withHiddenProperty, 'hidden', { value: 1 });
+
+    const hashValue = (value: unknown) =>
+      hashComponents({
+        sample: { durationMs: 1, status: 'fulfilled', value },
+      });
+
+    await expect(hashValue(withExtraProperty)).rejects.toThrow(
+      'Cannot hash extra array properties.',
+    );
+    await expect(hashValue(withAccessor)).rejects.toThrow(
+      'Cannot hash accessor properties.',
+    );
+    await expect(hashValue(withHiddenProperty)).rejects.toThrow(
+      'Cannot hash non-enumerable properties.',
+    );
+  });
+
+  it('validates the component map at runtime', async () => {
+    await expect(
+      hashComponents({
+        sample: { status: 'unknown' },
+      } as unknown as HashableComponents),
+    ).rejects.toThrow('Component "sample" has an invalid status.');
+    await expect(
+      hashComponents({ sample: null } as unknown as HashableComponents),
+    ).rejects.toThrow('Component "sample" must be a result object.');
   });
 
   it('fails clearly when Web Crypto is unavailable', async () => {
@@ -146,12 +217,12 @@ describe('component diagnostics', () => {
     const error = new RangeError('outside range');
     error.stack = 'diagnostic stack';
     const components = {
-      sample: { duration: 4, status: 'fulfilled', value: { error } },
+      sample: { durationMs: 4, status: 'fulfilled', value: { error } },
     } as HashableComponents;
 
     expect(JSON.parse(componentsToDebugString(components))).toEqual({
       sample: {
-        duration: 4,
+        durationMs: 4,
         status: 'fulfilled',
         value: {
           error: {
@@ -166,12 +237,12 @@ describe('component diagnostics', () => {
 
   it('serializes bigint values instead of throwing', () => {
     const components = {
-      sample: { duration: 1, status: 'fulfilled', value: 42n },
+      sample: { durationMs: 1, status: 'fulfilled', value: 42n },
     } as HashableComponents;
 
     expect(JSON.parse(componentsToDebugString(components))).toEqual({
       sample: {
-        duration: 1,
+        durationMs: 1,
         status: 'fulfilled',
         value: { $type: 'bigint', value: '42' },
       },
@@ -181,7 +252,7 @@ describe('component diagnostics', () => {
   it('preserves non-JSON numeric values in diagnostics', () => {
     const components = {
       sample: {
-        duration: 1,
+        durationMs: 1,
         status: 'fulfilled',
         value: [-0, Number.NaN, Infinity, -Infinity],
       },
@@ -189,7 +260,7 @@ describe('component diagnostics', () => {
 
     expect(JSON.parse(componentsToDebugString(components))).toEqual({
       sample: {
-        duration: 1,
+        durationMs: 1,
         status: 'fulfilled',
         value: [
           { $type: 'number', value: '-0' },

@@ -2,6 +2,7 @@
 import { isFontOSBad } from './fonts'
 import { WORKER_TYPE } from '../worker'
 import { getReportedPlatform } from './helpers'
+import { BOT_RULE_NAMES } from '../../types'
 
 // https://stackoverflow.com/a/22429679
 const hashMini = (x) => {
@@ -59,7 +60,7 @@ async function cipher(data: any): Promise<string[]> {
 }
 
 
-const getBotHash = (fp, imports) => {
+const getBotDetection = (fp, imports) => {
 	const { getFeaturesLie, computeWindowsRelease } = imports
 	const outsideFeaturesVersion = getFeaturesLie(fp)
 	const workerScopeIsBlocked = (
@@ -125,9 +126,13 @@ const getBotHash = (fp, imports) => {
 		crowdBlendingScoreIsLow: false, // csl
 	}
 
-	const botHash = Object.keys(botPatterns)
+	const botMask = BOT_RULE_NAMES
 		.map((key) => botPatterns[key] ? '1' : '0').join('')
-	return { botHash, badBot: Object.keys(botPatterns).find((key) => botPatterns[key]) }
+	const firstMatchedRule = BOT_RULE_NAMES.find((key) => botPatterns[key])
+	return {
+		botMask,
+		...(firstMatchedRule ? { firstMatchedRule } : {}),
+	}
 }
 
 const getFuzzyHash = async (fp) => {
@@ -349,4 +354,4 @@ const getFuzzyHash = async (fp) => {
 	return fuzzyFingerprint
 }
 
-export { hashMini, instanceId, hashify, getBotHash, getFuzzyHash, cipher }
+export { hashMini, instanceId, hashify, getBotDetection, getFuzzyHash, cipher }

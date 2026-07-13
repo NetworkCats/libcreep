@@ -5,4 +5,4 @@ declare const __LIBCREEP_PACKAGE_VERSION__: string;
 export const ALGORITHM_VERSION = __LIBCREEP_ALGORITHM_VERSION__;
 
 /** Version of the installed libcreep package. */
-export const VERSION = __LIBCREEP_PACKAGE_VERSION__;
+export const LIBRARY_VERSION = __LIBCREEP_PACKAGE_VERSION__;

@@ -22,8 +22,8 @@ npm install libcreep
 ```ts
 import { load } from 'libcreep';
 
-const agent = await load();
-const result = await agent.get();
+const collector = await load();
+const result = await collector.collect();
 
 console.log(result.visitorId);
 console.log(result.values);
@@ -41,7 +41,7 @@ Most detections run by default. WebRTC address detection is opt-in because it
 contacts STUN servers and may reveal network information:
 
 ```ts
-const result = await agent.get({ includeWebRTC: true });
+const result = await collector.collect({ includeWebRtc: true });
 ```
 
 ## Documentation

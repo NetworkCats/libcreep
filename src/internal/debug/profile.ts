@@ -1,7 +1,7 @@
 import type {
-  AuxiliaryDetectionName,
+  AuxiliaryComponentName,
   ComponentResult,
-  DetectionName,
+  CoreComponentName,
   FingerprintResult,
 } from '../../types.js';
 
@@ -30,7 +30,7 @@ function toRows(
   components:
     | Readonly<Partial<Record<string, ComponentResult<unknown>>>>
     | undefined,
-  duration: number,
+  collectionDurationMs: number,
 ): ProfileRow[] {
   if (components === undefined) return [];
   return Object.entries(components)
@@ -39,11 +39,13 @@ function toRows(
         ? []
         : [
             {
-              durationMs: round(component.duration),
+              durationMs: round(component.durationMs),
               name,
               percentOfCollection:
-                duration > 0
-                  ? round((component.duration / duration) * 100)
+                collectionDurationMs > 0
+                  ? round(
+                      (component.durationMs / collectionDurationMs) * 100,
+                    )
                   : 0,
               status: component.status,
             },
@@ -54,18 +56,18 @@ function toRows(
 
 /** @internal */
 export function createSpeedProfile(result: FingerprintResult): SpeedProfile {
-  const collectionDurationMs = round(result.duration);
+  const collectionDurationMs = round(result.durationMs);
   const core = toRows(
     result.components as Readonly<
-      Partial<Record<DetectionName, ComponentResult<unknown>>>
+      Partial<Record<CoreComponentName, ComponentResult<unknown>>>
     >,
-    result.duration,
+    result.durationMs,
   );
   const auxiliary = toRows(
     result.auxiliary as Readonly<
-      Partial<Record<AuxiliaryDetectionName, ComponentResult<unknown>>>
+      Partial<Record<AuxiliaryComponentName, ComponentResult<unknown>>>
     >,
-    result.duration,
+    result.durationMs,
   );
   const all = [...core, ...auxiliary];
   const measuredDetectorTimeMs = round(

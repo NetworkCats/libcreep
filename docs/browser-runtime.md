@@ -25,7 +25,7 @@ fallback and don't register persistent origin state.
 Service-worker-first detection is opt-in:
 
 ```ts
-const agent = await load({
+const collector = await load({
   worker: {
     strategy: 'service-first',
     url: '/worker.js',
@@ -39,7 +39,7 @@ to activate, and unregisters only its temporary registration. It does not
 replace or remove an existing application service worker. Host the complete
 `dist` output because the worker entry imports an additional packaged chunk.
 
-## Passive supplemental signals
+## Passive auxiliary signals
 
 Media Capabilities, media-device kinds, and browser status run by default.
 Media-device enumeration doesn't request camera or microphone permission, so
@@ -51,7 +51,7 @@ network, timing, stack, and client-script information.
 WebRTC collection is opt-in:
 
 ```ts
-const result = await agent.get({ includeWebRTC: true });
+const result = await collector.collect({ includeWebRtc: true });
 ```
 
 It creates a peer connection and uses the STUN servers configured by the

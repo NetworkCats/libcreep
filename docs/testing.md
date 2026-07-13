@@ -42,8 +42,8 @@ the build if profiler markers survive in JavaScript or source maps.
 
 - `test/api.unit.test.ts` covers SSR-safe imports, public errors, and detector
   manifests.
-- `test/agent.unit.test.ts` covers agent queuing, option forwarding, debug
-  output, failure recovery, one-shot collection, and document readiness.
+- `test/collector.unit.test.ts` covers collector queuing, option forwarding,
+  debug output, failure recovery, one-shot collection, and document readiness.
 - `test/hash.unit.test.ts` covers the canonical public hashing format, special
   JavaScript values, component statuses, error normalization, and missing Web
   Crypto support.
@@ -57,8 +57,8 @@ the build if profiler markers survive in JavaScript or source maps.
   collections, checks all core component results, and maps the upstream
   exploratory test areas to automated assertions.
   Browser tests use the production worker output. They verify default passive
-  signals separately from opt-in WebRTC and ensure repeated agent collection is
-  safe. They also cover abort signals, collection timeouts, canonical hashing,
-  and all three major browser engines.
+  signals separately from opt-in WebRTC and ensure repeated collection through
+  one collector is safe. They also cover abort signals, collection timeouts,
+  canonical hashing, and all three major browser engines.
 - `test/speed.browser.bench.ts` runs repeated warm speed samples and detector
   timing profiles independently in Chromium, Firefox, and WebKit.

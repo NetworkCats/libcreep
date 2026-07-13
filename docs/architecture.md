@@ -12,8 +12,8 @@ away from the other distribution files.
 
 ## Collection lifecycle
 
-1. `load()` initializes the browser runtime and returns an agent.
-2. `agent.get()` starts the core and passive supplemental probes.
+1. `load()` initializes the browser runtime and returns a collector.
+2. `collector.collect()` starts the core and passive auxiliary probes.
 3. Independent core probes run concurrently.
 4. Navigator collection follows worker collection because it compares values
    across scopes.
@@ -34,10 +34,12 @@ stable component set applies Creep.js trust rules for detected lies, privacy
 resistance, Brave fingerprint blocking, locale mismatches, and lower-entropy
 conditions.
 
-`rawVisitorId` hashes the raw components, while `visitorId` hashes the hardened
-stable components. Focused hashes let consumers compare narrower signal groups
-without reconstructing them. The fuzzy hash divides known metrics into bins to
-support similarity comparison.
+`rawVisitorId` hashes the raw components, while `visitorId` hashes an envelope
+containing the algorithm version and hardened stable components. Explicitly
+namespacing the stable hash prevents different algorithm revisions from
+silently sharing identifiers. Focused hashes let consumers compare narrower
+signal groups without reconstructing them. The fuzzy hash divides known metrics
+into bins to support similarity comparison.
 
 The bot bitset contains client-side patterns only. Patterns that require
 server-side history or crowd analysis remain unset because this project has no

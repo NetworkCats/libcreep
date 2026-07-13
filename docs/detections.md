@@ -5,8 +5,9 @@ This manifest is audited against Creep.js source revision
 
 ## Core fingerprint
 
-Every core component runs when `agent.get()` is called. A failed or unavailable
-browser API is isolated in `components` and doesn't stop other probes.
+Every core component runs when `collector.collect()` is called. A failed or
+unavailable browser API is isolated in `components` and doesn't stop other
+probes.
 
 | Component             | Main signals                                                     |
 | --------------------- | ---------------------------------------------------------------- |
@@ -36,7 +37,7 @@ browser API is isolated in `components` and doesn't stop other probes.
 | `intl`                | Locale-sensitive `Intl` constructors and lie checks              |
 | `features`            | JavaScript, DOM, CSS, and Window engine/version features         |
 
-## Supplemental detections
+## Auxiliary detections
 
 | Detection                             | Default | Reason                                                                               |
 | ------------------------------------- | ------- | ------------------------------------------------------------------------------------ |
@@ -46,7 +47,7 @@ browser API is isolated in `components` and doesn't stop other probes.
 | WebRTC SDP/STUN/address               | No      | Contacts STUN servers, may reveal network data, and can take seconds                 |
 | Service-worker scope                  | No      | Temporary registration mutates origin state; shared/dedicated workers remain default |
 
-Enable WebRTC with `agent.get({includeWebRTC: true})`. Enable the
+Enable WebRTC with `collector.collect({ includeWebRtc: true })`. Enable the
 service-worker-first strategy with
 `load({worker: {strategy: 'service-first'}})` and host the worker under a valid
 scope.

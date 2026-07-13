@@ -1,30 +1,32 @@
 import { componentsToDebugString, hashComponents } from './hash.js';
 import type {
-  BrowserSupport,
-  FingerprintAgent,
+  BrowserCapabilities,
+  CollectionOptions,
+  CollectOptions,
+  FingerprintCollector,
   FingerprintResult,
-  GetOptions,
   LoadOptions,
   WorkerStrategy,
 } from './types.js';
-import { ALGORITHM_VERSION, VERSION } from './version.js';
+import { ALGORITHM_VERSION, LIBRARY_VERSION } from './version.js';
 
 declare const __LIBCREEP_DEBUG__: boolean;
 
 export { componentsToDebugString, hashComponents } from './hash.js';
 export {
-  AUXILIARY_DETECTION_NAMES,
-  DEFAULT_AUXILIARY_DETECTION_NAMES,
-  DETECTION_NAMES,
-  OPT_IN_DETECTION_NAMES,
+  AUXILIARY_COMPONENT_NAMES,
+  BOT_RULE_NAMES,
+  CORE_COMPONENT_NAMES,
+  DEFAULT_AUXILIARY_COMPONENT_NAMES,
+  OPT_IN_AUXILIARY_COMPONENT_NAMES,
 } from './types.js';
 export type * from './hash.js';
 export type * from './types.js';
-export { ALGORITHM_VERSION, VERSION } from './version.js';
+export { ALGORITHM_VERSION, LIBRARY_VERSION } from './version.js';
 
 interface RuntimeModule {
   collectFingerprint(
-    options: GetOptions & {
+    options: CollectionOptions & {
       workerStrategy: WorkerStrategy;
       workerUrl: string;
     },
@@ -84,7 +86,8 @@ function assertBrowserEnvironment(): void {
 }
 
 function assertSupported(): void {
-  if (!getBrowserSupport().webCrypto || typeof TextEncoder === 'undefined') {
+  const capabilities = getBrowserCapabilities();
+  if (!capabilities.hasWebCrypto || !capabilities.hasTextEncoder) {
     throw new TypeError(
       'libcreep requires the Web Crypto and TextEncoder APIs.',
     );
@@ -130,53 +133,75 @@ function getDefaultWorkerUrl(): string {
   return new URL('./worker.js', moduleUrl).href;
 }
 
+function getWorkerStrategy(
+  strategy: WorkerStrategy | undefined,
+): WorkerStrategy {
+  const value = strategy ?? 'auto';
+  if (
+    value !== 'auto' &&
+    value !== 'dedicated-only' &&
+    value !== 'service-first'
+  ) {
+    throw new TypeError(`Unknown worker strategy: ${String(value)}`);
+  }
+  return value;
+}
+
 /** Reports whether the current environment is a browser window. */
 export function isBrowserEnvironment(): boolean {
   return typeof window !== 'undefined' && typeof document !== 'undefined';
 }
 
 /** Reports the runtime capabilities relevant to fingerprint collection. */
-export function getBrowserSupport(): BrowserSupport {
-  const browserEnvironment = isBrowserEnvironment();
+export function getBrowserCapabilities(): BrowserCapabilities {
+  const isBrowser = isBrowserEnvironment();
   return {
-    browserEnvironment,
-    secureContext: browserEnvironment && window.isSecureContext === true,
-    webCrypto:
+    hasDedicatedWorker: isBrowser && typeof Worker !== 'undefined',
+    hasServiceWorker:
+      isBrowser &&
+      typeof navigator !== 'undefined' &&
+      'serviceWorker' in navigator,
+    hasSharedWorker: isBrowser && typeof SharedWorker !== 'undefined',
+    hasTextEncoder: typeof TextEncoder !== 'undefined',
+    hasWebCrypto:
       typeof crypto !== 'undefined' &&
       typeof crypto.subtle?.digest === 'function',
-    workers: browserEnvironment && typeof Worker !== 'undefined',
+    isBrowser,
+    isSecureContext: isBrowser && window.isSecureContext === true,
   };
 }
 
 /** Reports whether the minimum APIs required for collection are available. */
-export function isSupported(): boolean {
-  const support = getBrowserSupport();
+export function isFingerprintingSupported(): boolean {
+  const capabilities = getBrowserCapabilities();
   return (
-    support.browserEnvironment &&
-    support.webCrypto &&
-    typeof TextEncoder !== 'undefined'
+    capabilities.isBrowser &&
+    capabilities.hasTextEncoder &&
+    capabilities.hasWebCrypto
   );
 }
 
 export async function load(
   options: LoadOptions = {},
-): Promise<FingerprintAgent> {
+): Promise<FingerprintCollector> {
   assertBrowserEnvironment();
   assertSupported();
   await waitForDocumentBody();
 
   const runtime = (await import('./runtime.js')) as RuntimeModule;
   const workerUrl = String(options.worker?.url ?? getDefaultWorkerUrl());
-  const workerStrategy = options.worker?.strategy ?? 'auto';
+  const workerStrategy = getWorkerStrategy(options.worker?.strategy);
   const debug = options.debug ?? false;
   return {
     algorithmVersion: ALGORITHM_VERSION,
-    version: VERSION,
-    get(getOptions: GetOptions = {}): Promise<FingerprintResult> {
+    libraryVersion: LIBRARY_VERSION,
+    collect(
+      collectionOptions: CollectionOptions = {},
+    ): Promise<FingerprintResult> {
       const queuedOperation = collectionQueue.then(() => {
-        throwIfAborted(getOptions.signal);
+        throwIfAborted(collectionOptions.signal);
         return runtime.collectFingerprint({
-          ...getOptions,
+          ...collectionOptions,
           workerStrategy,
           workerUrl,
         });
@@ -185,12 +210,15 @@ export async function load(
         () => undefined,
         () => undefined,
       );
-      const operation = rejectWhenAborted(queuedOperation, getOptions.signal);
+      const operation = rejectWhenAborted(
+        queuedOperation,
+        collectionOptions.signal,
+      );
       if (debug) {
         void operation.then(
           (result) => {
             console.debug(
-              `[libcreep ${VERSION}; algorithm ${ALGORITHM_VERSION}]\n${componentsToDebugString(
+              `[libcreep ${LIBRARY_VERSION}; algorithm ${ALGORITHM_VERSION}]\n${componentsToDebugString(
                 result.components,
               )}`,
             );
@@ -210,23 +238,23 @@ export async function load(
 }
 
 export async function collect(
-  options: LoadOptions & GetOptions = {},
+  options: CollectOptions = {},
 ): Promise<FingerprintResult> {
-  const { debug, worker, ...getOptions } = options;
-  const agent = await load({ debug, worker });
-  return agent.get(getOptions);
+  const { debug, worker, ...collectionOptions } = options;
+  const collector = await load({ debug, worker });
+  return collector.collect(collectionOptions);
 }
 
 const LibCreep = Object.freeze({
   algorithmVersion: ALGORITHM_VERSION,
   collect,
   componentsToDebugString,
-  getBrowserSupport,
+  getBrowserCapabilities,
   hashComponents,
   isBrowserEnvironment,
-  isSupported,
+  isFingerprintingSupported,
   load,
-  version: VERSION,
+  libraryVersion: LIBRARY_VERSION,
 });
 
 export default LibCreep;
