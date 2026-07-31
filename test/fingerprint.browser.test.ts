@@ -430,30 +430,15 @@ describe('frontend API', () => {
   });
 
   it('does not let a stalled auxiliary promise hold cancellation or the queue', async () => {
-    const storage = navigator.storage;
-    let estimateOwner: object | null = storage;
-    while (
-      estimateOwner !== null &&
-      !Object.prototype.hasOwnProperty.call(estimateOwner, 'estimate')
-    ) {
-      estimateOwner = Object.getPrototypeOf(estimateOwner) as object | null;
-    }
-    if (estimateOwner === null) {
-      throw new TypeError('StorageManager.estimate has no property owner.');
-    }
-    const nativeEstimate = Object.getOwnPropertyDescriptor(
-      estimateOwner,
-      'estimate',
-    );
-    if (nativeEstimate === undefined) {
-      throw new TypeError('StorageManager.estimate has no descriptor.');
-    }
+    const nativeStorage = Object.getOwnPropertyDescriptor(navigator, 'storage');
     let estimateCalls = 0;
-    Object.defineProperty(estimateOwner, 'estimate', {
+    Object.defineProperty(navigator, 'storage', {
       configurable: true,
-      value: () => {
-        estimateCalls += 1;
-        return new Promise<StorageEstimate>(() => undefined);
+      value: {
+        estimate: () => {
+          estimateCalls += 1;
+          return new Promise<StorageEstimate>(() => undefined);
+        },
       },
     });
     const collector = await load({
@@ -469,7 +454,11 @@ describe('frontend API', () => {
       await expect(pending).rejects.toBe(reason);
     } finally {
       controller.abort(reason);
-      Object.defineProperty(estimateOwner, 'estimate', nativeEstimate);
+      if (nativeStorage === undefined) {
+        Reflect.deleteProperty(navigator, 'storage');
+      } else {
+        Object.defineProperty(navigator, 'storage', nativeStorage);
+      }
     }
 
     await expect(
