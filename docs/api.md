@@ -28,7 +28,9 @@ function load(options?: LoadOptions): Promise<FingerprintCollector>;
 ```
 
 `load()` verifies the minimum browser APIs, waits until `document.body` exists,
-dynamically loads the detector runtime, and returns a reusable collector.
+dynamically loads the detector runtime, and returns a reusable collector. Its
+load-specific `signal` and `timeoutMs` options cover that readiness/import
+phase; they do not apply to later calls on the returned collector.
 
 ```ts
 import { load } from 'libcreep';
@@ -52,6 +54,8 @@ waiting in this queue.
 ```ts
 interface LoadOptions {
   debug?: boolean;
+  signal?: AbortSignal;
+  timeoutMs?: number;
   worker?: {
     strategy?: 'auto' | 'dedicated-only' | 'service-first';
     url?: string | URL;
@@ -62,7 +66,9 @@ interface LoadOptions {
 | Option            | Default                                | Behavior                                                                                                                                                                                                                                                     |
 | ----------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `debug`           | `false`                                | After each successful collection, logs package/algorithm versions and formatted core component results. Development and test transforms also print detector timing tables; the production package excludes that profiler. Failed collections are not logged. |
-| `worker.url`      | `./worker.js` beside the package entry | Overrides the module-worker asset location. Use this when a bundler or CDN relocates package assets. The worker and every chunk it imports must be deployed together.                                                                                        |
+| `signal`          | none                                   | Cancels document readiness and dynamic runtime loading. It does not govern later `collector.collect()` calls.                                                                                                                                                |
+| `timeoutMs`       | none                                   | Applies a 0 to 2,147,483,647 millisecond deadline to `load()` only. Invalid values reject with `TypeError`.                                                                                                                                                  |
+| `worker.url`      | `./worker.js` beside the package entry | Overrides the module-worker asset location. Use this when a bundler or CDN relocates package assets.                                                                                                                                                         |
 | `worker.strategy` | `'auto'`                               | Controls the worker-scope fallback order described below.                                                                                                                                                                                                    |
 
 Worker strategies are:
@@ -86,7 +92,13 @@ for hosting, CSP, secure-context, and fallback details.
 ```ts
 function collect(options?: CollectOptions): Promise<FingerprintResult>;
 
-interface CollectOptions extends LoadOptions, CollectionOptions {}
+interface CollectOptions {
+  debug?: boolean;
+  includeWebRtc?: boolean;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  worker?: WorkerOptions;
+}
 ```
 
 `collect()` is the one-shot convenience API. It separates the load options,
@@ -116,14 +128,14 @@ interface CollectionOptions {
 | --------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | `includeWebRtc` | `false` | Enables SDP, STUN, ICE-candidate, and address collection. This can disclose network information and contact external STUN servers.          |
 | `signal`        | none    | Rejects a queued or active call when aborted. An active abort also triggers cleanup for worker, WebRTC, audio, and temporary DOM resources. |
-| `timeoutMs`     | none    | Aborts the active collection after the given finite, non-negative number of milliseconds. Invalid values reject with `TypeError`.           |
+| `timeoutMs`     | none    | Aborts the entire operation after 0 to 2,147,483,647 milliseconds. Invalid values reject immediately with `TypeError`.                      |
 
-The timeout starts when this call reaches the front of the serialization queue;
-it does not include time spent waiting behind another collection. Use an
-`AbortSignal` if a queued call also needs an external deadline. A timeout rejects
-with a `DOMException` whose name is `TimeoutError`. A signal rejects with
-`signal.reason`, or an `AbortError` DOM exception when no explicit reason is
-available.
+For `collector.collect()`, the deadline includes its queue wait and active
+detectors. For the one-shot `collect()` function, it additionally includes
+waiting for `document.body` and dynamically loading the runtime. A timeout
+rejects with a `DOMException` whose name is `TimeoutError`. A signal rejects
+with `signal.reason`, or an `AbortError` DOM exception when no explicit reason
+is available.
 
 ```ts
 const controller = new AbortController();
@@ -201,12 +213,19 @@ switch (navigatorResult.status) {
 | `bot`              | Client-side bot-rule bit mask and the first matching rule, when any.                                                                               |
 | `components`       | A result entry for every name in `CORE_COMPONENT_NAMES`.                                                                                           |
 | `values`           | Successful core values only, keyed by component name. Each value includes its component `$hash`.                                                   |
-| `stableComponents` | The trust-filtered values used as input to `visitorId`; untrusted or unavailable groups may be absent or `undefined`.                              |
+| `stableComponents` | A detached snapshot of the exact trust-filtered values hashed into `visitorId`; untrusted or unavailable groups may be absent or `undefined`.      |
 | `focusedHashes`    | SHA-256 hashes for available narrower signal groups, such as Canvas image/text, WebGL, DOM rectangles, CSS, media types, and device/timezone data. |
 | `auxiliary`        | Results for `mediaCapabilities`, `mediaDevices`, `status`, and `webRtc`. Auxiliary values are not included in `visitorId` or `rawVisitorId`.       |
 | `durationMs`       | Active collection duration in milliseconds. Detector durations can overlap because many probes run concurrently.                                   |
 | `algorithmVersion` | Version of the stable-ID inputs and canonical fingerprint algorithm.                                                                               |
 | `libraryVersion`   | Installed npm package version.                                                                                                                     |
+
+For fulfilled core entries, `components[name].value` and `values[name]` may
+reference the same per-result snapshot; treat result data as immutable.
+`stableComponents` is independently snapshotted, so mutating raw values cannot
+change the data represented by the already-computed `visitorId`. Stable signal
+groups omit the per-component `$hash`; those enrichment hashes are outputs, not
+inputs to the stable identifier.
 
 `visitorId` is hardened against known unstable or untrusted signals, but it is
 not guaranteed to remain unchanged. Browser upgrades, privacy modes,
@@ -229,7 +248,7 @@ client-only package.
 | 3   | `outsideFeaturesVersion`     | Engine features fall outside the detected version range.                                       |
 | 4   | `extremeLieCount`            | Severe stealth signals, an unusual font/OS pairing, or more than 100 recorded lies were found. |
 | 5   | `excessiveLooseFingerprints` | Reserved for server-side history; always `0` here.                                             |
-| 6   | `workerScopeIsBlocked`       | No usable trusted worker scope was collected; a dedicated worker also sets this heuristic.     |
+| 6   | `workerScopeIsBlocked`       | No usable worker scope was collected.                                                          |
 | 7   | `crowdBlendingScoreIsLow`    | Reserved for server-side crowd analysis; always `0` here.                                      |
 
 The stable component groups are `navigator`, `screen`, `workerScope`, `media`,
@@ -255,6 +274,10 @@ interface FocusedHashes {
 }
 ```
 
+A focused hash is present only when its underlying signal is non-null and
+usable. A fulfilled but partial component does not receive hashes for optional
+fields it did not actually report.
+
 ## `hashComponents(components)`
 
 ```ts
@@ -274,15 +297,19 @@ const customId = await hashComponents({
 });
 ```
 
-Component names and plain-object keys are sorted. Fulfilled values are hashed;
+Component names and plain-object keys are sorted by UTF-16 code units, without
+locale-sensitive collation. Fulfilled values are hashed;
 non-fulfilled statuses are hashed by status. `durationMs`, rejected error text,
 and stacks are ignored, so timing and browser-specific wording do not
 destabilize the hash.
 
-Fulfilled values may contain plain objects, arrays, JSON primitives,
-`undefined`, `bigint`, non-finite numbers, negative zero, and `Error` objects.
-Functions, symbols, cycles, symbol-keyed properties, accessors, non-enumerable
-or extra array properties, and non-plain objects such as `Date` are rejected
+Fulfilled values may contain plain objects (including objects from another
+window realm and objects whose keys use libcreep's reserved canonical `$type`
+tag), arrays (including sparse arrays), JSON primitives, `undefined`, `bigint`,
+non-finite numbers, negative zero, and genuine cross-realm `Error` objects.
+Functions, symbols, cycles, symbol-keyed properties,
+accessors, non-enumerable or extra array properties, and non-plain objects such
+as `Date` are rejected
 instead of being silently converted to lossy JSON. SHA-256 requires Web Crypto.
 
 ## `componentsToDebugString(components)`
@@ -290,7 +317,9 @@ instead of being silently converted to lossy JSON. SHA-256 requires Web Crypto.
 Returns indented JSON for diagnostics. Unlike `hashComponents()`, this output
 retains statuses, durations, and captured error details. It also serializes
 `Error`, `bigint`, negative zero, and non-finite numbers without the usual JSON
-loss.
+loss. It represents `undefined` object fields and array entries as
+`{ "$type": "undefined" }` instead of dropping them or converting them to
+`null`.
 
 ```ts
 import { componentsToDebugString } from 'libcreep';

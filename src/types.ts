@@ -68,8 +68,23 @@ export interface UserAgentData {
 export interface GPUInfo {
   readonly [key: string]: unknown;
   readonly compressedGPU?: string;
-  readonly confidence?: string;
-  readonly grade?: string;
+  readonly confidence?: 'high' | 'moderate' | 'low';
+  readonly gibbers?: string;
+  readonly grade?: 'A' | 'C' | 'F';
+  readonly parts?: string;
+  readonly warnings?: ReadonlyArray<string>;
+}
+
+export interface NavigatorPlugin {
+  readonly description: string;
+  readonly filename: string;
+  readonly name: string;
+  readonly version?: string;
+}
+
+export interface WebGPUInfo {
+  readonly adapterInfo: ReadonlyArray<string | undefined>;
+  readonly limits: Readonly<Record<string, number>>;
 }
 
 export interface WorkerScopeComponent extends ComponentHash {
@@ -79,15 +94,29 @@ export interface WorkerScopeComponent extends ComponentHash {
   readonly gpu?: GPUInfo;
   readonly hardwareConcurrency?: number;
   readonly language?: string;
-  readonly languages?: string;
+  readonly languages?: ReadonlyArray<string>;
   readonly lied?: LieFlag;
+  readonly lies?: Readonly<
+    Record<
+      string,
+      string | false | Readonly<Record<string, ReadonlyArray<string>>>
+    >
+  >;
+  readonly locale?: string;
   readonly localeEntropyIsTrusty?: boolean;
   readonly localeIntlEntropyIsTrusty?: boolean;
   readonly platform?: string;
   readonly system?: string;
+  readonly engineCurrencyLocale?: string;
+  readonly systemCurrencyLocale?: string;
+  readonly timezoneOffset?: number;
   readonly timezoneLocation?: string;
+  readonly uaPostReduction?: boolean;
   readonly userAgent?: string;
   readonly userAgentData?: UserAgentData;
+  readonly userAgentDataVersion?: string;
+  readonly userAgentEngine?: string;
+  readonly userAgentVersion?: string;
   readonly webglRenderer?: string;
   readonly webglVendor?: string;
 }
@@ -102,16 +131,22 @@ export interface NavigatorComponent extends ComponentHash {
   readonly globalPrivacyControl?: boolean;
   readonly hardwareConcurrency?: number;
   readonly language?: string;
+  readonly languages?: ReadonlyArray<string>;
   readonly lied: LieFlag;
   readonly maxTouchPoints?: number | null;
   readonly mimeTypes?: ReadonlyArray<string>;
   readonly oscpu?: string;
   readonly platform?: string;
+  readonly plugins?: ReadonlyArray<NavigatorPlugin>;
+  readonly permissions?: Readonly<Record<string, ReadonlyArray<string>>>;
   readonly properties?: ReadonlyArray<string>;
   readonly system?: string;
+  readonly uaPostReduction?: boolean;
   readonly userAgent?: string;
   readonly userAgentData?: UserAgentData;
+  readonly userAgentParsed?: string;
   readonly vendor?: string;
+  readonly webgpu?: WebGPUInfo;
 }
 
 export interface WindowFeaturesComponent extends ComponentHash {
@@ -192,7 +227,7 @@ export interface MediaComponent extends ComponentHash {
 
 export interface Canvas2DComponent extends ComponentHash {
   readonly dataURI: string;
-  readonly emojiSet: ReadonlyArray<unknown>;
+  readonly emojiSet: ReadonlyArray<string>;
   readonly emojiURI: string;
   readonly lied: LieFlag;
   readonly liedTextMetrics?: LieFlag;
@@ -225,7 +260,7 @@ export interface MathComponent extends ComponentHash {
 }
 
 export interface ConsoleErrorsComponent extends ComponentHash {
-  readonly errors: ReadonlyArray<unknown>;
+  readonly errors: ReadonlyArray<string>;
 }
 
 export interface TimezoneComponent extends ComponentHash {
@@ -266,8 +301,8 @@ export interface OfflineAudioContextComponent extends ComponentHash {
 }
 
 export interface FontsComponent extends ComponentHash {
-  readonly apps: string;
-  readonly emojiSet: ReadonlyArray<unknown>;
+  readonly apps: ReadonlyArray<string>;
+  readonly emojiSet: ReadonlyArray<string>;
   readonly fontFaceLoadFonts: ReadonlyArray<string>;
   readonly lied: LieFlag;
   readonly pixelSizeSystemSum: number;
@@ -290,7 +325,7 @@ export interface CapturedErrorsComponent extends ComponentHash {
 export interface SVGComponent extends ComponentHash {
   readonly bBox: number;
   readonly computedTextLength: number;
-  readonly emojiSet: ReadonlyArray<unknown>;
+  readonly emojiSet: ReadonlyArray<string>;
   readonly extentOfChar: number;
   readonly lied: LieFlag;
   readonly subStringLength: number;
@@ -300,6 +335,7 @@ export interface SVGComponent extends ComponentHash {
 export interface PrivacyResistanceComponent extends ComponentHash {
   readonly engine: string;
   readonly extension?: string;
+  readonly extensionHashPattern?: Readonly<Record<string, string>>;
   readonly mode?: string;
   readonly privacy?: string;
   readonly security?: Readonly<Record<string, boolean>>;
@@ -317,14 +353,19 @@ export interface IntlComponent extends ComponentHash {
 }
 
 export interface EngineFeaturesComponent extends ComponentHash {
-  readonly cssFeatures: ReadonlyArray<unknown>;
+  readonly cssFeatures: ReadonlyArray<string>;
+  /** Pinned feature-map estimate; terminal values can be lower bounds like `115+`. */
   readonly cssVersion?: string;
-  readonly jsFeatures: ReadonlyArray<unknown>;
-  readonly jsFeaturesKeys: string | ReadonlyArray<never>;
+  readonly jsFeatures: ReadonlyArray<string>;
+  readonly jsFeaturesKeys: ReadonlyArray<string>;
+  /** Pinned feature-map estimate; terminal values can be lower bounds like `115+`. */
   readonly jsVersion?: string;
+  /** Pinned feature-map estimate; terminal values can be lower bounds like `115+`. */
   readonly version?: string;
+  /** Minimum-known range represented by the pinned feature maps. */
   readonly versionRange: ReadonlyArray<string>;
-  readonly windowFeatures: ReadonlyArray<unknown>;
+  readonly windowFeatures: ReadonlyArray<string>;
+  /** Pinned feature-map estimate; terminal values can be lower bounds like `115+`. */
   readonly windowVersion?: string;
 }
 
@@ -388,17 +429,32 @@ export type CoreComponentResults = {
   >;
 };
 
+/** Trust-filtered CSS media fields used by the stable visitor identifier. */
+export interface StableCSSMediaComponent {
+  readonly anyHover?: string;
+  readonly anyPointer?: string;
+  readonly colorGamut?: string;
+  readonly colorScheme?: string;
+  readonly forcedColors?: string;
+  readonly hover?: string;
+  readonly invertedColors?: string;
+  readonly monochrome?: string;
+  readonly pointer?: string;
+  readonly reducedMotion?: string;
+  readonly screenQuery?: CSSMediaComponent['screenQuery'];
+}
+
 export interface StableComponentValues {
-  readonly navigator: Partial<NavigatorComponent>;
-  readonly screen: Partial<ScreenComponent>;
-  readonly workerScope: Partial<WorkerScopeComponent>;
-  readonly media: MediaComponent;
-  readonly canvas2d: Partial<Canvas2DComponent>;
-  readonly canvasWebgl: Partial<CanvasWebGLComponent>;
-  readonly cssMedia: Partial<CSSMediaComponent>;
+  readonly navigator: Partial<Omit<NavigatorComponent, '$hash'>>;
+  readonly screen: Partial<Omit<ScreenComponent, '$hash'>>;
+  readonly workerScope: Partial<Omit<WorkerScopeComponent, '$hash'>>;
+  readonly media: Omit<MediaComponent, '$hash'>;
+  readonly canvas2d: Partial<Omit<Canvas2DComponent, '$hash'>>;
+  readonly canvasWebgl: Partial<Omit<CanvasWebGLComponent, '$hash'>>;
+  readonly cssMedia: StableCSSMediaComponent;
   readonly css: NonNullable<NonNullable<CSSComponent['system']>['fonts']>;
-  readonly timezone: Partial<TimezoneComponent>;
-  readonly offlineAudioContext: OfflineAudioContextComponent;
+  readonly timezone: Partial<Omit<TimezoneComponent, '$hash'>>;
+  readonly offlineAudioContext: Omit<OfflineAudioContextComponent, '$hash'>;
   readonly fonts: FontsComponent['fontFaceLoadFonts'];
 }
 
@@ -512,6 +568,10 @@ export interface WorkerOptions {
 export interface LoadOptions {
   /** Print a structured collection report after each successful call. */
   readonly debug?: boolean;
+  /** Cancels document readiness and runtime loading when aborted. */
+  readonly signal?: AbortSignal;
+  /** Cancels loading after up to 2,147,483,647ms. */
+  readonly timeoutMs?: number;
   /** Configure the isolated worker used by the worker-scope detection. */
   readonly worker?: WorkerOptions;
 }
@@ -522,13 +582,27 @@ export interface CollectionOptions {
    * network information and add up to several seconds, so it is opt-in.
    */
   readonly includeWebRtc?: boolean;
-  /** Cancels collection and detector resources when aborted. */
+  /** Cancels a queued or active collection and its detector resources. */
   readonly signal?: AbortSignal;
-  /** Cancels collection after this many milliseconds. */
+  /** Cancels queueing or active collection after up to 2,147,483,647ms. */
   readonly timeoutMs?: number;
 }
 
-export interface CollectOptions extends LoadOptions, CollectionOptions {}
+export interface CollectOptions {
+  /** Print a structured collection report after a successful call. */
+  readonly debug?: boolean;
+  /**
+   * Use STUN to collect WebRTC SDP and address signals. This can disclose
+   * network information and add up to several seconds, so it is opt-in.
+   */
+  readonly includeWebRtc?: boolean;
+  /** Cancels one-shot loading, queueing, and active detector resources. */
+  readonly signal?: AbortSignal;
+  /** Cancels the full one-shot operation after up to 2,147,483,647ms. */
+  readonly timeoutMs?: number;
+  /** Configure the isolated worker used by the worker-scope detection. */
+  readonly worker?: WorkerOptions;
+}
 
 export interface FingerprintCollector {
   readonly algorithmVersion: string;

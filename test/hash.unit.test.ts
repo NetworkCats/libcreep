@@ -1,10 +1,12 @@
 import { createHash } from 'node:crypto';
+import { runInNewContext } from 'node:vm';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   componentsToDebugString,
   hashComponents,
+  normalizeError,
   type HashableComponents,
 } from '../src/hash.js';
 
@@ -13,10 +15,47 @@ function sha256Json(value: unknown): string {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 describe('canonical component hashing', () => {
+  it('uses locale-independent UTF-16 key ordering', async () => {
+    const localeCompare = vi
+      .spyOn(String.prototype, 'localeCompare')
+      .mockImplementation(() => {
+        throw new Error('locale-sensitive comparison must not be used');
+      });
+    const components = {
+      z: { durationMs: 1, status: 'fulfilled', value: { a: 1, A: 2 } },
+      A: { durationMs: 1, status: 'fulfilled', value: true },
+      a: { durationMs: 1, status: 'fulfilled', value: false },
+    } as HashableComponents;
+
+    await expect(hashComponents(components)).resolves.toBe(
+      sha256Json({
+        A: { value: true },
+        a: { value: false },
+        z: { value: { A: 2, a: 1 } },
+      }),
+    );
+    expect(localeCompare).not.toHaveBeenCalled();
+  });
+
+  it('accepts ordinary objects created in another realm', async () => {
+    const value = runInNewContext('({ z: 1, a: { y: 2, b: 3 } })') as unknown;
+
+    await expect(
+      hashComponents({
+        sample: { durationMs: 1, status: 'fulfilled', value },
+      }),
+    ).resolves.toBe(
+      sha256Json({
+        sample: { value: { a: { b: 3, y: 2 }, z: 1 } },
+      }),
+    );
+  });
+
   it('sorts component and value keys and encodes non-JSON primitives', async () => {
     const components = {
       missing: undefined,
@@ -115,13 +154,92 @@ describe('canonical component hashing', () => {
       sha256Json({
         sample: {
           value: {
-            message: 'bad component value',
-            name: 'TypeError',
-            stack: 'fixture stack',
+            $type: 'error',
+            value: {
+              message: 'bad component value',
+              name: 'TypeError',
+              stack: 'fixture stack',
+            },
           },
         },
       }),
     );
+  });
+
+  it('normalizes cross-realm Error values instead of rejecting their prototype', async () => {
+    const error = runInNewContext(`
+      (() => {
+        const error = new TypeError('cross-realm failure');
+        error.stack = 'cross-realm stack';
+        return error;
+      })()
+    `) as unknown;
+    expect(error).not.toBeInstanceOf(Error);
+
+    await expect(
+      hashComponents({
+        sample: { durationMs: 1, status: 'fulfilled', value: error },
+      }),
+    ).resolves.toBe(
+      sha256Json({
+        sample: {
+          value: {
+            $type: 'error',
+            value: {
+              message: 'cross-realm failure',
+              name: 'TypeError',
+              stack: 'cross-realm stack',
+            },
+          },
+        },
+      }),
+    );
+  });
+
+  it('normalizes hostile Error properties without invoking them unsafely', async () => {
+    const error = new Error();
+    Object.defineProperties(error, {
+      message: {
+        configurable: true,
+        get: () => {
+          throw new Error('blocked message getter');
+        },
+      },
+      name: {
+        configurable: true,
+        get: () => 17,
+      },
+      stack: {
+        configurable: true,
+        get: () => {
+          throw new Error('blocked stack getter');
+        },
+      },
+    });
+
+    expect(normalizeError(error)).toEqual({
+      message: 'Unknown error',
+      name: '17',
+    });
+    await expect(
+      hashComponents({
+        sample: { durationMs: 1, status: 'fulfilled', value: error },
+      }),
+    ).resolves.toBe(
+      sha256Json({
+        sample: {
+          value: {
+            $type: 'error',
+            value: { message: 'Unknown error', name: '17' },
+          },
+        },
+      }),
+    );
+    expect(() =>
+      componentsToDebugString({
+        sample: { durationMs: 1, status: 'fulfilled', value: error },
+      }),
+    ).not.toThrow();
   });
 
   it('rejects cyclic and unsupported values instead of hashing collisions', async () => {
@@ -155,6 +273,65 @@ describe('canonical component hashing', () => {
         },
       }),
     ).rejects.toThrow('Cannot hash non-plain object values.');
+
+    const disguisedNonPlainObject = Object.create({
+      constructor: Object,
+      meaning: 42,
+    }) as object;
+    await expect(
+      hashComponents({
+        sample: {
+          durationMs: 1,
+          status: 'fulfilled',
+          value: disguisedNonPlainObject,
+        },
+      }),
+    ).rejects.toThrow('Cannot hash non-plain object values.');
+  });
+
+  it('distinguishes canonical tags from user objects and array holes', async () => {
+    const hashValue = (value: unknown) =>
+      hashComponents({
+        sample: { durationMs: 1, status: 'fulfilled', value },
+      });
+    const error = new Error('fixture');
+    error.stack = 'fixture stack';
+    const sparse: unknown[] = [];
+    sparse.length = 1;
+
+    await expect(hashValue(undefined)).resolves.not.toBe(
+      await hashValue({ $type: 'undefined' }),
+    );
+    await expect(hashValue(2n)).resolves.not.toBe(
+      await hashValue({ $type: 'bigint', value: '2' }),
+    );
+    await expect(hashValue(Number.NaN)).resolves.not.toBe(
+      await hashValue({ $type: 'number', value: 'NaN' }),
+    );
+    await expect(hashValue(error)).resolves.not.toBe(
+      await hashValue({
+        message: 'fixture',
+        name: 'Error',
+        stack: 'fixture stack',
+      }),
+    );
+    await expect(hashValue(sparse)).resolves.not.toBe(
+      await hashValue([undefined]),
+    );
+  });
+
+  it('rejects objects that spoof the reserved Error brand', async () => {
+    const spoof = {
+      message: 'fixture',
+      name: 'Error',
+      [Symbol.toStringTag]: 'Error',
+    };
+
+    await expect(
+      hashComponents({
+        sample: { durationMs: 1, status: 'fulfilled', value: spoof },
+      }),
+    ).rejects.toThrow('Cannot hash symbol-keyed properties.');
   });
 
   it('rejects properties that canonical JSON would otherwise ignore', async () => {
@@ -193,6 +370,11 @@ describe('canonical component hashing', () => {
     await expect(
       hashComponents({ sample: null } as unknown as HashableComponents),
     ).rejects.toThrow('Component "sample" must be a result object.');
+    await expect(
+      hashComponents({
+        sample: { durationMs: 1, status: 'fulfilled' },
+      } as unknown as HashableComponents),
+    ).rejects.toThrow('Fulfilled component "sample" must contain a value.');
   });
 
   it('fails clearly when Web Crypto is unavailable', async () => {
@@ -268,6 +450,27 @@ describe('component diagnostics', () => {
           { $type: 'number', value: 'Infinity' },
           { $type: 'number', value: '-Infinity' },
         ],
+      },
+    });
+  });
+
+  it('preserves undefined object fields and array entries in diagnostics', () => {
+    const components = {
+      sample: {
+        durationMs: 1,
+        status: 'fulfilled',
+        value: { array: [undefined], field: undefined },
+      },
+    } as HashableComponents;
+
+    expect(JSON.parse(componentsToDebugString(components))).toEqual({
+      sample: {
+        durationMs: 1,
+        status: 'fulfilled',
+        value: {
+          array: [{ $type: 'undefined' }],
+          field: { $type: 'undefined' },
+        },
       },
     });
   });

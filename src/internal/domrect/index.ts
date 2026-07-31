@@ -1,21 +1,25 @@
-// @ts-nocheck
 import { captureError } from '../errors'
 import { lieProps, PHANTOM_DARKNESS, documentLie } from '../lies'
 import { instanceId, hashMini } from '../utils/crypto'
 import { createTimer, queueEvent, EMOJIS, CSS_FONT_FAMILY, IS_BLINK, IS_GECKO, logTestResult } from '../utils/helpers'
 import { createMeasurementFragment, replaceElement } from '../utils/measurement'
-function getRectSum(rect: Record<string, number>): number {
-	return Object.keys(rect).reduce((acc, key) => acc += rect[key], 0)/100_000_000
-}
+let probeSequence = 0
 
 // inspired by
 // https://privacycheck.sec.lrz.de/active/fp_gcr/fp_getclientrects.html
 // https://privacycheck.sec.lrz.de/active/fp_e/fp_emoji.html
 export default async function getClientRects() {
+	let container: HTMLElement | null = null
+	let placeholder: HTMLElement | null = null
 	try {
 		const timer = createTimer()
 		await queueEvent(timer)
-		const toNativeObject = (domRect: DOMRect): Record<string, number> => {
+		type RectValues = Pick<DOMRectReadOnly, 'bottom' | 'height' | 'left' | 'right' | 'width' | 'top' | 'x' | 'y'>
+		const requireRect = (domRect: DOMRect | undefined, label: string): DOMRect => {
+			if (!domRect) throw new Error(`${label} returned no rectangle`)
+			return domRect
+		}
+		const toNativeObject = (domRect: DOMRectReadOnly): RectValues => {
 			return {
 				bottom: domRect.bottom,
 				height: domRect.height,
@@ -58,50 +62,50 @@ export default async function getClientRects() {
 			return range.getBoundingClientRect()
 		}
 
-		const rectsId = `${instanceId}-client-rects-div`
-		const divElement = document.createElement('div')
-		divElement.setAttribute('id', rectsId)
-		DOC.body.appendChild(divElement)
+		const rectsId = `${instanceId}-client-rects-${++probeSequence}`
+		placeholder = DOC.createElement('div')
+		placeholder.setAttribute('id', rectsId)
+		DOC.body.appendChild(placeholder)
 
-		replaceElement(divElement, createMeasurementFragment`
+		const fragment = createMeasurementFragment`
 		<div id="${rectsId}">
 			<style>
-			.rect-ghost,
-			.rect-known {
+				#${rectsId} .rect-ghost,
+				#${rectsId} .rect-known {
 				top: 0;
 				left: 0;
 				position: absolute;
 				visibility: hidden;
 			}
-			.rect-known {
+				#${rectsId} .rect-known {
 				width: 100px;
 				height: 100px;
 				transform: rotate(45deg);
 			}
-			.rect-ghost {
+				#${rectsId} .rect-ghost {
 				width: 0;
 				height: 0;
 			}
 			</style>
 			<div class="rect-known"></div>
 			<div class="rect-ghost"></div>
-			<div style="perspective:100px;width:1000.099%;" id="rect-container">
+			<div style="perspective:100px;width:1000.099%;" id="${rectsId}-rect-container">
 				<style>
-				.rects {
+				#${rectsId} .rects {
 					width: 1000%;
 					height: 1000%;
 					max-width: 1000%;
 				}
-				.absolute {
+				#${rectsId} .absolute {
 					position: absolute;
 				}
-				#cRect1 {
+				#${rectsId}-cRect1 {
 					border: solid 2.715px;
 					border-color: #F72585;
 					padding: 3.98px;
 					margin-left: 12.12px;
 				}
-				#cRect2 {
+				#${rectsId}-cRect2 {
 					border: solid 2px;
 					border-color: #7209B7;
 					font-size: 30px;
@@ -109,14 +113,14 @@ export default async function getClientRects() {
 					padding: 3.98px;
 					transform: skewY(23.1753218deg) rotate3d(10.00099, 90, 0.100000000000009, 60000000000008.00000009deg);
 				}
-				#cRect3 {
+				#${rectsId}-cRect3 {
 					border: solid 2.89px;
 					border-color: #3A0CA3;
 					font-size: 45px;
 					transform: skewY(-23.1753218deg) scale(1099.0000000099, 1.89) matrix(1.11, 2.0001, -1.0001, 1.009, 150, 94.4);
 					margin-top: 50px;
 				}
-				#cRect4 {
+				#${rectsId}-cRect4 {
 					border: solid 2px;
 					border-color: #4361EE;
 					transform: matrix(1.11, 2.0001, -1.0001, 1.009, 150, 94.4);
@@ -126,77 +130,77 @@ export default async function getClientRects() {
 					left: 239.4141px;
 					top: 8.5050px;
 				}
-				#cRect5 {
+				#${rectsId}-cRect5 {
 					border: solid 2px;
 					border-color: #4CC9F0;
 					margin-left: 42.395pt;
 				}
-				#cRect6 {
+				#${rectsId}-cRect6 {
 					border: solid 2px;
 					border-color: #F72585;
 					transform: perspective(12890px) translateZ(101.5px);
 					padding: 12px;
 				}
-				#cRect7 {
+				#${rectsId}-cRect7 {
 					margin-top: -350.552px;
 					margin-left: 0.9099rem;
 					border: solid 2px;
 					border-color: #4361EE;
 				}
-				#cRect8 {
+				#${rectsId}-cRect8 {
 					margin-top: -150.552px;
 					margin-left: 15.9099rem;
 					border: solid 2px;
 					border-color: #3A0CA3;
 				}
-				#cRect9 {
+				#${rectsId}-cRect9 {
 					margin-top: -110.552px;
 					margin-left: 15.9099rem;
 					border: solid 2px;
 					border-color: #7209B7;
 				}
-				#cRect10 {
+				#${rectsId}-cRect10 {
 					margin-top: -315.552px;
 					margin-left: 15.9099rem;
 					border: solid 2px;
 					border-color: #F72585;
 				}
-				#cRect11 {
+				#${rectsId}-cRect11 {
 					width: 10px;
 					height: 10px;
 					margin-left: 15.0000009099rem;
 					border: solid 2px;
 					border-color: #F72585;
 				}
-				#cRect12 {
+				#${rectsId}-cRect12 {
 					width: 10px;
 					height: 10px;
 					margin-left: 15.0000009099rem;
 					border: solid 2px;
 					border-color: #F72585;
 				}
-				#rect-container .shift-dom-rect {
+				#${rectsId}-rect-container .shift-dom-rect {
 					top: 1px !important;
 					left: 1px !important;
 				}
 				</style>
-				<div id="cRect1" class="rects"></div>
-				<div id="cRect2" class="rects"></div>
-				<div id="cRect3" class="rects"></div>
-				<div id="cRect4" class="rects absolute"></div>
-				<div id="cRect5" class="rects"></div>
-				<div id="cRect6" class="rects"></div>
-				<div id="cRect7" class="rects absolute"></div>
-				<div id="cRect8" class="rects absolute"></div>
-				<div id="cRect9" class="rects absolute"></div>
-				<div id="cRect10" class="rects absolute"></div>
-				<div id="cRect11" class="rects"></div>
-				<div id="cRect12" class="rects"></div>
+				<div id="${rectsId}-cRect1" class="rects"></div>
+				<div id="${rectsId}-cRect2" class="rects"></div>
+				<div id="${rectsId}-cRect3" class="rects"></div>
+				<div id="${rectsId}-cRect4" class="rects absolute"></div>
+				<div id="${rectsId}-cRect5" class="rects"></div>
+				<div id="${rectsId}-cRect6" class="rects"></div>
+				<div id="${rectsId}-cRect7" class="rects absolute"></div>
+				<div id="${rectsId}-cRect8" class="rects absolute"></div>
+				<div id="${rectsId}-cRect9" class="rects absolute"></div>
+				<div id="${rectsId}-cRect10" class="rects absolute"></div>
+				<div id="${rectsId}-cRect11" class="rects"></div>
+				<div id="${rectsId}-cRect12" class="rects"></div>
 				<div id="emoji" class="emojis"></div>
 			</div>
 			<div id="emoji-container">
 				<style>
-				.domrect-emoji {
+				#${rectsId} .domrect-emoji {
 					font-family: ${CSS_FONT_FAMILY};
 					font-size: 200px !important;
 					height: auto;
@@ -211,18 +215,23 @@ export default async function getClientRects() {
 				}
 			</div>
 		</div>
-		`)
+		`
+		container = fragment.firstElementChild as HTMLElement | null
+		if (!replaceElement(placeholder, fragment)) {
+			throw new Error('DOMRect measurement placeholder is detached')
+		}
+		if (!container) throw new Error('DOMRect measurement container blocked')
 
 		// get emoji set and system
 		const pattern: Set<string> = new Set()
 		await queueEvent(timer)
 
-		const emojiElems = [...DOC.getElementsByClassName('domrect-emoji')]
+		const emojiElems = [...container.getElementsByClassName('domrect-emoji')]
 		const emojiSet = emojiElems.reduce((emojiSet, el, i) => {
 			const emoji = EMOJIS[i]
-			const { height, width } = getBestRect(el)
+			const { height, width } = requireRect(getBestRect(el), 'Emoji measurement')
 			const dimensions = `${width},${height}`
-			if (!pattern.has(dimensions)) {
+			if (emoji && !pattern.has(dimensions)) {
 				pattern.add(dimensions)
 				emojiSet.add(emoji)
 			}
@@ -234,11 +243,11 @@ export default async function getClientRects() {
 		}).reduce((acc, x) => acc += x, 0)
 
 		// get clientRects
-		const range = document.createRange()
-		const rectElems = DOC.getElementsByClassName('rects')
+		const range = DOC.createRange()
+		const rectElems = container.getElementsByClassName('rects')
 
 		const elementClientRects = [...rectElems].map((el) => {
-			return toNativeObject(el.getClientRects()[0])
+			return toNativeObject(requireRect(el.getClientRects()[0], 'Element.getClientRects'))
 		})
 
 		const elementBoundingClientRect = [...rectElems].map((el) => {
@@ -247,7 +256,7 @@ export default async function getClientRects() {
 
 		const rangeClientRects = [...rectElems].map((el) => {
 			range.selectNode(el)
-			return toNativeObject(range.getClientRects()[0])
+			return toNativeObject(requireRect(range.getClientRects()[0], 'Range.getClientRects'))
 		})
 
 		const rangeBoundingClientRect = [...rectElems].map((el) => {
@@ -258,11 +267,13 @@ export default async function getClientRects() {
 		// detect failed shift calculation
 		// inspired by https://arkenfox.github.io/TZP
 		const rect4 = [...rectElems][3]
-		const { top: initialTop } = elementClientRects[3]
+		const initialRect4 = elementClientRects[3]
+		if (!rect4 || !initialRect4) throw new Error('DOMRect shift measurement element blocked')
+		const { top: initialTop } = initialRect4
 		rect4.classList.add('shift-dom-rect')
-		const { top: shiftedTop } = toNativeObject(rect4.getClientRects()[0])
+		const { top: shiftedTop } = toNativeObject(requireRect(rect4.getClientRects()[0], 'Shifted Element.getClientRects'))
 		rect4.classList.remove('shift-dom-rect')
-		const { top: unshiftedTop } = toNativeObject(rect4.getClientRects()[0])
+		const { top: unshiftedTop } = toNativeObject(requireRect(rect4.getClientRects()[0], 'Unshifted Element.getClientRects'))
 		const diff = initialTop - shiftedTop
 		const unshiftLie = diff != (unshiftedTop - shiftedTop)
 		if (unshiftLie) {
@@ -290,16 +301,20 @@ export default async function getClientRects() {
 		}
 
 		// detect equal elements mismatch lie
-		const { right: right1, left: left1 } = elementClientRects[10]
-		const { right: right2, left: left2 } = elementClientRects[11]
+		const equalRect1 = elementClientRects[10]
+		const equalRect2 = elementClientRects[11]
+		if (!equalRect1 || !equalRect2) throw new Error('DOMRect equality measurement elements blocked')
+		const { right: right1, left: left1 } = equalRect1
+		const { right: right2, left: left2 } = equalRect2
 		if (right1 != right2 || left1 != left2) {
 			documentLie('Element.getClientRects', 'equal elements mismatch')
 			lied = true
 		}
 
 		// detect unknown rotate dimensions
-		const knownEl = [...DOC.getElementsByClassName('rect-known')][0]
-		const knownDimensions = toNativeObject(knownEl.getClientRects()[0])
+		const knownEl = [...container.getElementsByClassName('rect-known')][0]
+		if (!knownEl) throw new Error('DOMRect known measurement element blocked')
+		const knownDimensions = toNativeObject(requireRect(knownEl.getClientRects()[0], 'Known Element.getClientRects'))
 		const knownHash = hashMini(knownDimensions)
 
 		if (IS_BLINK) {
@@ -318,17 +333,16 @@ export default async function getClientRects() {
 		}
 
 		// detect ghost dimensions
-		const ghostEl = [...DOC.getElementsByClassName('rect-ghost')][0]
-		const ghostDimensions = toNativeObject(ghostEl.getClientRects()[0])
-		const hasGhostDimensions = Object.keys(ghostDimensions)
+		const ghostEl = [...container.getElementsByClassName('rect-ghost')][0]
+		if (!ghostEl) throw new Error('DOMRect ghost measurement element blocked')
+		const ghostDimensions = toNativeObject(requireRect(ghostEl.getClientRects()[0], 'Ghost Element.getClientRects'))
+		const hasGhostDimensions = (Object.keys(ghostDimensions) as (keyof RectValues)[])
 			.some((key) => ghostDimensions[key] !== 0)
 
 		if (hasGhostDimensions) {
 			documentLie('Element.getClientRects', 'unknown ghost dimensions')
 			lied = true
 		}
-
-		DOC.body.removeChild(DOC.getElementById(rectsId) as HTMLElement)
 
 		logTestResult({ time: timer.stop(), test: 'rects', passed: true })
 		return {
@@ -341,12 +355,11 @@ export default async function getClientRects() {
 			lied,
 		}
 	} catch (error) {
-		const doc = PHANTOM_DARKNESS?.document?.body ? PHANTOM_DARKNESS.document : document
-		doc.getElementById(`${instanceId}-client-rects-div`)?.remove()
 		logTestResult({ test: 'rects', passed: false })
 		captureError(error)
-		return
+		throw error
+	} finally {
+		container?.remove()
+		placeholder?.remove()
 	}
 }
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any

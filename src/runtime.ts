@@ -14,9 +14,9 @@ import getHeadlessFeatures from './internal/headless/index.js';
 import getIntl from './internal/intl/index.js';
 import {
   getLies,
+  initializePrototypeLies,
   lieRecords,
   removePhantom,
-  renewPhantom,
 } from './internal/lies/index.js';
 import getMaths from './internal/math/index.js';
 import getMedia from './internal/media/index.js';
@@ -28,11 +28,7 @@ import { getStatus } from './internal/status/index.js';
 import getSVG from './internal/svg/index.js';
 import getTimezone from './internal/timezone/index.js';
 import { getTrash, trashBin } from './internal/trash/index.js';
-import {
-  getBotDetection,
-  getFuzzyHash,
-  hashify,
-} from './internal/utils/crypto.js';
+import { getBotDetection, getFuzzyHash } from './internal/utils/crypto.js';
 import {
   braveBrowser,
   computeWindowsRelease,
@@ -49,7 +45,7 @@ import getWebRTCData, {
 } from './internal/webrtc/index.js';
 import getWindowFeatures from './internal/window/index.js';
 import getBestWorkerScope from './internal/worker/index.js';
-import { hashComponents, hashValue } from './hash.js';
+import { hashComponents, hashValue, normalizeError } from './hash.js';
 import { ALGORITHM_VERSION, LIBRARY_VERSION } from './version.js';
 import {
   CORE_COMPONENT_NAMES,
@@ -71,6 +67,9 @@ type UnknownRecord = Record<string, unknown>;
 type ProbeResults = Partial<
   Record<CoreComponentName, ComponentResult<unknown>>
 >;
+type FeaturesInput = Parameters<typeof getEngineFeatures>[0];
+type HeadlessInput = Parameters<typeof getHeadlessFeatures>[0];
+type NavigatorInput = Parameters<typeof getNavigator>[0];
 
 interface RuntimeOptions extends CollectionOptions {
   readonly workerStrategy: WorkerStrategy;
@@ -82,35 +81,30 @@ interface CollectionCancellation {
   readonly signal?: AbortSignal;
 }
 
+/** @internal Tracks detector work that may outlive its abort-facing wrapper. */
+export interface DetectorActivity {
+  readonly pending: Set<Promise<unknown>>;
+}
+
+const MAX_TIMEOUT_MS = 2_147_483_647;
+
 function now(): number {
   return performance.now();
 }
 
-function stringifySafely(value: unknown): string {
-  try {
-    return String(value);
-  } catch {
-    return 'Unknown error';
-  }
+function serializeError(error: unknown): ComponentError {
+  return normalizeError(error);
 }
 
-function serializeError(error: unknown): ComponentError {
-  if (error instanceof Error) {
-    return {
-      message: error.message,
-      name: error.name,
-      ...(error.stack === undefined ? {} : { stack: error.stack }),
-    };
-  }
-  return { message: stringifySafely(error), name: 'Error' };
+function getAbortReason(signal: AbortSignal): unknown {
+  return 'reason' in signal
+    ? signal.reason
+    : new DOMException('Fingerprint collection was aborted.', 'AbortError');
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
   if (!signal?.aborted) return;
-  throw (
-    signal.reason ??
-    new DOMException('Fingerprint collection was aborted.', 'AbortError')
-  );
+  throw getAbortReason(signal);
 }
 
 function rejectWhenAborted<T>(
@@ -129,10 +123,7 @@ function rejectWhenAborted<T>(
     };
     const abort = (): void => {
       if (!cleanup()) return;
-      reject(
-        signal.reason ??
-          new DOMException('Fingerprint collection was aborted.', 'AbortError'),
-      );
+      reject(getAbortReason(signal));
     };
 
     void operation.then(
@@ -148,6 +139,28 @@ function rejectWhenAborted<T>(
   });
 }
 
+/** @internal Keeps the underlying detector visible after its wrapper aborts. */
+export function trackDetectorOperation<T>(
+  operation: Promise<T>,
+  activity: DetectorActivity,
+): Promise<T> {
+  activity.pending.add(operation);
+  void operation.then(
+    () => activity.pending.delete(operation),
+    () => activity.pending.delete(operation),
+  );
+  return operation;
+}
+
+/** @internal Waits for every detector started by the current collection. */
+export async function drainDetectorActivity(
+  activity: DetectorActivity,
+): Promise<void> {
+  while (activity.pending.size > 0) {
+    await Promise.allSettled(activity.pending);
+  }
+}
+
 function isCancellation(_error: unknown, signal?: AbortSignal): boolean {
   return signal?.aborted === true;
 }
@@ -158,9 +171,11 @@ function createCollectionCancellation(
 ): CollectionCancellation {
   if (
     timeoutMs !== undefined &&
-    (!Number.isFinite(timeoutMs) || timeoutMs < 0)
+    (!Number.isFinite(timeoutMs) || timeoutMs < 0 || timeoutMs > MAX_TIMEOUT_MS)
   ) {
-    throw new TypeError('timeoutMs must be a finite, non-negative number.');
+    throw new TypeError(
+      `timeoutMs must be a finite number between 0 and ${MAX_TIMEOUT_MS}.`,
+    );
   }
   if (signal === undefined && timeoutMs === undefined) {
     return { dispose: () => undefined };
@@ -193,17 +208,22 @@ function createCollectionCancellation(
   };
 }
 
-async function runProbe(
+/** @internal Runs a probe while retaining its underlying lifetime. */
+export async function runProbe(
   results: ProbeResults,
   name: CoreComponentName,
   detector: () => unknown | Promise<unknown>,
   signal?: AbortSignal,
+  activity?: DetectorActivity,
 ): Promise<void> {
   const start = now();
   try {
     throwIfAborted(signal);
+    const detectorOperation = Promise.resolve().then(detector);
     const value = await rejectWhenAborted(
-      Promise.resolve().then(detector),
+      activity === undefined
+        ? detectorOperation
+        : trackDetectorOperation(detectorOperation, activity),
       signal,
     );
     throwIfAborted(signal);
@@ -234,15 +254,27 @@ async function waitForProbes(
   throwIfAborted(signal);
 }
 
-function readProbe(results: ProbeResults, name: CoreComponentName): unknown {
+function readProbe<T = unknown>(
+  results: ProbeResults,
+  name: CoreComponentName,
+): T | undefined {
   const result = results[name];
-  return result?.status === 'fulfilled' ? result.value : undefined;
+  return result?.status === 'fulfilled' ? (result.value as T) : undefined;
 }
 
 function asRecord(value: unknown): UnknownRecord {
   return value !== null && typeof value === 'object'
     ? (value as UnknownRecord)
     : {};
+}
+
+function stripComponentHash(value: unknown): unknown {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return value;
+  }
+  const signals = { ...(value as UnknownRecord) };
+  delete signals.$hash;
+  return signals;
 }
 
 function hasOwn(record: UnknownRecord, key: string): boolean {
@@ -253,14 +285,58 @@ function hashRecordValue(
   record: UnknownRecord,
   key: string,
 ): Promise<string | undefined> {
-  return hasOwn(record, key)
-    ? hashify(record[key])
+  return hasOwn(record, key) &&
+    record[key] !== undefined &&
+    record[key] !== null
+    ? hashValue(record[key])
     : Promise.resolve(undefined);
 }
 
-function snapshot<T>(value: T): T {
+function clonePlainData(
+  value: unknown,
+  clones: Map<object, unknown> = new Map(),
+): unknown {
+  if (value === null || typeof value !== 'object') return value;
+  const existing = clones.get(value);
+  if (existing !== undefined) return existing;
+
+  const isArray = Array.isArray(value);
+  const prototype = Object.getPrototypeOf(value) as object | null;
+  if (!isArray && prototype !== null && prototype !== Object.prototype) {
+    throw new TypeError(
+      'Cannot snapshot non-plain detector data without structuredClone.',
+    );
+  }
+
+  const clone: object = isArray ? [] : Object.create(prototype);
+  clones.set(value, clone);
+  for (const key of Reflect.ownKeys(value)) {
+    if (isArray && key === 'length') continue;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor === undefined) continue;
+    if (!('value' in descriptor)) {
+      throw new TypeError(
+        'Cannot snapshot accessor-based detector data without structuredClone.',
+      );
+    }
+    Object.defineProperty(clone, key, {
+      ...descriptor,
+      value: clonePlainData(descriptor.value, clones),
+    });
+  }
+  if (isArray) {
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length');
+    if (lengthDescriptor !== undefined) {
+      Object.defineProperty(clone, 'length', lengthDescriptor);
+    }
+  }
+  return clone;
+}
+
+/** @internal Clones detector data without a lossy JSON fallback. */
+export function snapshot<T>(value: T): T {
   if (typeof structuredClone === 'function') return structuredClone(value);
-  return JSON.parse(JSON.stringify(value)) as T;
+  return clonePlainData(value) as T;
 }
 
 const detectorStateBaseline = {
@@ -279,13 +355,13 @@ function resetRecord(
   Object.assign(record, snapshot(baseline));
 }
 
-function resetDetectorState(): void {
+function resetDetectorState(): number {
   errorsCaptured.resetErrors(snapshot(detectorStateBaseline.errors));
   lieRecords.resetRecords(snapshot(detectorStateBaseline.lies));
   trashBin.resetBin(snapshot(detectorStateBaseline.trash));
   resetRecord(Analysis, detectorStateBaseline.analysis);
   resetRecord(LowerEntropy, detectorStateBaseline.lowerEntropy);
-  renewPhantom();
+  return initializePrototypeLies();
 }
 
 async function runAuxiliary<T>(
@@ -295,10 +371,8 @@ async function runAuxiliary<T>(
   const start = now();
   try {
     throwIfAborted(signal);
-    const value = await rejectWhenAborted(
-      Promise.resolve().then(detector),
-      signal,
-    );
+    const detectorOperation = Promise.resolve().then(detector);
+    const value = await rejectWhenAborted(detectorOperation, signal);
     throwIfAborted(signal);
     const durationMs = now() - start;
     return value === undefined || value === null
@@ -331,7 +405,8 @@ async function collectAuxiliary(
   ]);
 
   return {
-    mediaCapabilities,
+    mediaCapabilities:
+      mediaCapabilities as AuxiliaryComponentResults['mediaCapabilities'],
     mediaDevices,
     status,
     webRtc,
@@ -370,44 +445,44 @@ export async function buildFocusedHashes(
   const timezone = asRecord(raw.timezone);
   const navigatorData = asRecord(raw.navigator);
   const worker = asRecord(raw.workerScope);
+  const webglParameters = asRecord(webgl.parameters);
+  const hasWebglParameters = Object.values(webglParameters).some(
+    (value) => value !== undefined && value !== null,
+  );
+  const clientRectValues = [
+    rects.elementBoundingClientRect,
+    rects.elementClientRects,
+    rects.rangeBoundingClientRect,
+    rects.rangeClientRects,
+  ];
+  const deviceAndTimezoneData = getDeviceOfTimezoneData({
+    cssMedia: asRecord(raw.cssMedia),
+    navigatorData,
+    screen,
+    timezone,
+    worker,
+  });
   const focusedHashCandidates: FocusedHashes = {
     canvas2dEmoji: await hashRecordValue(canvas2d, 'emojiURI'),
     canvas2dImage: await hashRecordValue(canvas2d, 'dataURI'),
     canvas2dPaint: await hashRecordValue(canvas2d, 'paintURI'),
     canvas2dText: await hashRecordValue(canvas2d, 'textURI'),
     canvasWebglImage: await hashRecordValue(webgl, 'dataURI'),
-    canvasWebglParameters:
-      Object.keys(webgl).length === 0
-        ? undefined
-        : await hashify(
-            getReducedGpuParameters(webgl, braveFingerprintingBlocking),
-          ),
-    deviceAndTimezone: [
-      raw.cssMedia,
-      raw.navigator,
-      raw.screen,
-      raw.timezone,
-      raw.workerScope,
-    ].every((value) => value == null)
+    canvasWebglParameters: !hasWebglParameters
       ? undefined
-      : await hashify(
-          getDeviceOfTimezoneData({
-            cssMedia: asRecord(raw.cssMedia),
-            navigatorData,
-            screen,
-            timezone,
-            worker,
-          }),
+      : await hashValue(
+          getReducedGpuParameters(webgl, braveFingerprintingBlocking),
         ),
-    clientRects:
-      Object.keys(rects).length === 0
-        ? undefined
-        : await hashify([
-            rects.elementBoundingClientRect,
-            rects.elementClientRects,
-            rects.rangeBoundingClientRect,
-            rects.rangeClientRects,
-          ]),
+    deviceAndTimezone: deviceAndTimezoneData.every(
+      (value) => value === undefined || value === null,
+    )
+      ? undefined
+      : await hashValue(deviceAndTimezoneData),
+    clientRects: clientRectValues.some(
+      (value) => value === undefined || value === null,
+    )
+      ? undefined
+      : await hashValue(clientRectValues),
     mediaMimeTypes: await hashRecordValue(media, 'mimeTypes'),
     cssComputedStyle: await hashRecordValue(css, 'computedStyle'),
     cssSystem: await hashRecordValue(css, 'system'),
@@ -442,7 +517,7 @@ async function enrichComponents(
       const value = raw[name];
       return [
         name,
-        value == null ? undefined : await hashify(hashTargets[name]),
+        value == null ? undefined : await hashValue(hashTargets[name]),
       ] as const;
     }),
   );
@@ -453,11 +528,11 @@ async function enrichComponents(
 
   const pixels =
     Array.isArray(webgl.pixels) && webgl.pixels.length > 0
-      ? await hashify(webgl.pixels)
+      ? await hashValue(webgl.pixels)
       : undefined;
   const pixels2 =
     Array.isArray(webgl.pixels2) && webgl.pixels2.length > 0
-      ? await hashify(webgl.pixels2)
+      ? await hashValue(webgl.pixels2)
       : undefined;
 
   const components = Object.fromEntries(
@@ -548,9 +623,11 @@ function getDeviceOfTimezoneData(input: DeviceOfTimezoneInput): unknown[] {
   ];
 }
 
-function buildStableFingerprint(
+/** @internal Builds the trust-filtered input to the stable visitor ID. */
+export function buildStableFingerprint(
   components: CoreComponentValues,
   braveFingerprintingBlocking: boolean,
+  entropy: Readonly<Record<string, boolean>> = LowerEntropy,
 ): StableFingerprint {
   const fp = components as Record<string, unknown>;
   const worker = asRecord(fp.workerScope);
@@ -562,7 +639,7 @@ function buildStableFingerprint(
   const cssMedia = asRecord(fp.cssMedia);
   const css = asRecord(fp.css);
   const timezone = asRecord(fp.timezone);
-  const audio = asRecord(fp.offlineAudioContext);
+  const audio = asRecord(stripComponentHash(fp.offlineAudioContext));
   const fonts = asRecord(fp.fonts);
   const privacyResistFingerprinting = /^(tor browser|firefox)$/i.test(
     String(resistance.privacy ?? ''),
@@ -577,7 +654,10 @@ function buildStableFingerprint(
     const gpu = asRecord(webgl.gpu);
     const parameters = asRecord(webgl.parameters);
     return gpu.confidence === 'low'
-      ? {}
+      ? {
+          UNMASKED_RENDERER_WEBGL: undefined,
+          UNMASKED_VENDOR_WEBGL: undefined,
+        }
       : {
           UNMASKED_RENDERER_WEBGL: gpu.compressedGPU,
           UNMASKED_VENDOR_WEBGL: parameters.UNMASKED_VENDOR_WEBGL,
@@ -607,10 +687,20 @@ function buildStableFingerprint(
   })();
 
   const stableWebgl = (() => {
-    if (Object.keys(webgl).length === 0 || webgl.lied || LowerEntropy.WEBGL) {
+    if (Object.keys(webgl).length === 0 || webgl.lied || entropy.WEBGL) {
       return undefined;
     }
     const parameters = asRecord(webgl.parameters);
+    const gpu = asRecord(webgl.gpu);
+    const stableGpu =
+      webgl.gpu === undefined || gpu.confidence === 'low'
+        ? {}
+        : { gpu: webgl.gpu };
+    const stableWebglSignals = Object.fromEntries(
+      Object.entries(webgl).filter(
+        ([key]) => key !== '$hash' && key !== 'gpu' && key !== 'parameters',
+      ),
+    );
     if (braveFingerprintingBlocking) {
       return {
         parameters: {
@@ -619,16 +709,16 @@ function buildStableFingerprint(
         },
       };
     }
-    const canvasIsUntrusted = canvas2d.lied || LowerEntropy.CANVAS;
+    const canvasIsUntrusted = canvas2d.lied || entropy.CANVAS;
     return {
       ...(canvasIsUntrusted
         ? {
             extensions: webgl.extensions,
-            gpu: webgl.gpu,
             lied: webgl.lied,
             parameterOrExtensionLie: webgl.parameterOrExtensionLie,
           }
-        : webgl),
+        : stableWebglSignals),
+      ...stableGpu,
       parameters: { ...parameters, ...hardenGpu() },
     };
   })();
@@ -658,7 +748,7 @@ function buildStableFingerprint(
       Object.keys(screen).length === 0 ||
       screen.lied ||
       privacyResistFingerprinting ||
-      LowerEntropy.SCREEN
+      entropy.SCREEN
         ? undefined
         : hardenEntropy({
             colorDepth: screen.colorDepth,
@@ -678,10 +768,10 @@ function buildStableFingerprint(
             hardwareConcurrency: braveFingerprintingBlocking
               ? undefined
               : worker.hardwareConcurrency,
-            language: !LowerEntropy.TIME_ZONE ? worker.language : undefined,
+            language: !entropy.TIME_ZONE ? worker.language : undefined,
             platform: worker.platform,
             system: worker.system,
-            timezoneLocation: !LowerEntropy.TIME_ZONE
+            timezoneLocation: !entropy.TIME_ZONE
               ? hardenEntropy(worker.timezoneLocation)
               : undefined,
             userAgentData: {
@@ -698,7 +788,7 @@ function buildStableFingerprint(
                 ? worker.webglVendor
                 : undefined,
           },
-    media: fp.media,
+    media: stripComponentHash(fp.media),
     canvas2d: stableCanvas2d,
     canvasWebgl: stableWebgl,
     cssMedia:
@@ -719,27 +809,25 @@ function buildStableFingerprint(
             reducedMotion: mediaCSS['prefers-reduced-motion'],
             screenQuery:
               privacyResistFingerprinting ||
-              LowerEntropy.SCREEN ||
-              LowerEntropy.IFRAME_SCREEN
+              entropy.SCREEN ||
+              entropy.IFRAME_SCREEN
                 ? undefined
                 : hardenEntropy(cssMedia.screenQuery),
           },
     css: asRecord(css.system).fonts,
     timezone:
-      Object.keys(timezone).length === 0 ||
-      timezone.lied ||
-      LowerEntropy.TIME_ZONE
+      Object.keys(timezone).length === 0 || timezone.lied || entropy.TIME_ZONE
         ? undefined
         : {
             lied: timezone.lied,
             locationMeasured: hardenEntropy(timezone.locationMeasured),
           },
     offlineAudioContext:
-      Object.keys(audio).length === 0 || audio.lied || LowerEntropy.AUDIO
+      Object.keys(audio).length === 0 || audio.lied || entropy.AUDIO
         ? undefined
         : audio,
     fonts:
-      Object.keys(fonts).length === 0 || fonts.lied || LowerEntropy.FONTS
+      Object.keys(fonts).length === 0 || fonts.lied || entropy.FONTS
         ? undefined
         : fonts.fontFaceLoadFonts,
   };
@@ -759,24 +847,26 @@ export async function collectFingerprint(
 ): Promise<FingerprintResult> {
   const start = now();
   const results: ProbeResults = {};
+  const detectorActivity: DetectorActivity = { pending: new Set() };
   const cancellation = createCollectionCancellation(
     options.signal,
     options.timeoutMs,
   );
-  resetDetectorState();
   const { signal } = cancellation;
-  const auxiliaryPromise = collectAuxiliary(
-    options.includeWebRtc ?? false,
-    signal,
-  );
-  void auxiliaryPromise.catch(() => undefined);
+  let auxiliaryPromise: Promise<AuxiliaryComponentResults> | undefined;
+  let liesInitializationDurationMs = 0;
   const probe = (
     name: CoreComponentName,
     detector: () => unknown | Promise<unknown>,
-  ): Promise<void> => runProbe(results, name, detector, signal);
+  ): Promise<void> =>
+    runProbe(results, name, detector, signal, detectorActivity);
 
   try {
     throwIfAborted(signal);
+    liesInitializationDurationMs = resetDetectorState();
+    throwIfAborted(signal);
+    auxiliaryPromise = collectAuxiliary(options.includeWebRtc ?? false, signal);
+    void auxiliaryPromise.catch(() => undefined);
     const isBrave = IS_BLINK
       ? await rejectWhenAborted(Promise.resolve(braveBrowser()), signal)
       : false;
@@ -793,7 +883,7 @@ export async function collectFingerprint(
         probe('workerScope', () =>
           getBestWorkerScope(options.workerUrl, options.workerStrategy, signal),
         ),
-        probe('voices', getVoices),
+        probe('voices', () => getVoices(signal)),
         probe('offlineAudioContext', () => getOfflineAudioContext(signal)),
         probe('canvasWebgl', getCanvasWebgl),
         probe('canvas2d', getCanvas2d),
@@ -816,21 +906,32 @@ export async function collectFingerprint(
     );
 
     await probe('navigator', () =>
-      getNavigator(readProbe(results, 'workerScope')),
+      getNavigator(readProbe<NavigatorInput>(results, 'workerScope')),
     );
     await waitForProbes(
       [
         probe('headless', () =>
           getHeadlessFeatures({
-            webgl: readProbe(results, 'canvasWebgl'),
-            workerScope: readProbe(results, 'workerScope'),
+            webgl: readProbe<HeadlessInput['webgl']>(results, 'canvasWebgl'),
+            workerScope: readProbe<HeadlessInput['workerScope']>(
+              results,
+              'workerScope',
+            ),
           }),
         ),
         probe('features', () =>
           getEngineFeatures({
-            cssComputed: readProbe(results, 'css'),
-            navigatorComputed: readProbe(results, 'navigator'),
-            windowFeaturesComputed: readProbe(results, 'windowFeatures'),
+            cssComputed: readProbe<FeaturesInput['cssComputed']>(
+              results,
+              'css',
+            ),
+            navigatorComputed: readProbe<FeaturesInput['navigatorComputed']>(
+              results,
+              'navigator',
+            ),
+            windowFeaturesComputed: readProbe<
+              FeaturesInput['windowFeaturesComputed']
+            >(results, 'windowFeatures'),
           }),
         ),
       ],
@@ -844,6 +945,13 @@ export async function collectFingerprint(
       ],
       signal,
     );
+    const liesResult = results.lies;
+    if (liesResult !== undefined) {
+      results.lies = {
+        ...liesResult,
+        durationMs: liesResult.durationMs + liesInitializationDurationMs,
+      };
+    }
 
     const { components: collectedValues, focusedHashes } =
       await rejectWhenAborted(
@@ -860,9 +968,8 @@ export async function collectFingerprint(
       }
     }
     const components = completeResults(results);
-    const stableComponents = buildStableFingerprint(
-      values,
-      braveFingerprintingBlocking,
+    const stableComponents = snapshot(
+      buildStableFingerprint(values, braveFingerprintingBlocking),
     );
     const auxiliary = snapshot(await auxiliaryPromise);
     const [rawVisitorId, visitorId, fuzzyHash, bot] = await rejectWhenAborted(
@@ -900,7 +1007,9 @@ export async function collectFingerprint(
       visitorId,
     };
   } catch (error) {
-    await auxiliaryPromise.catch(() => undefined);
+    await auxiliaryPromise?.catch(() => undefined);
+    await drainDetectorActivity(detectorActivity);
+    throwIfAborted(signal);
     throw error;
   } finally {
     cancellation.dispose();

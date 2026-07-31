@@ -42,8 +42,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build package
-        run: npm run build
+      - name: Install browser test dependencies
+        run: npm exec -c 'playwright install --with-deps chromium firefox webkit'
+
+      - name: Validate release
+        run: npm run validate
 
       - name: Publish package
         run: npm publish

@@ -53,6 +53,48 @@ describe('server-side import safety', () => {
     });
     expect(isFingerprintingSupported()).toBe(false);
   });
+
+  it('does not treat null browser globals as a browser environment', () => {
+    vi.stubGlobal('window', null);
+    vi.stubGlobal('document', null);
+
+    expect(isBrowserEnvironment()).toBe(false);
+    expect(getBrowserCapabilities().isBrowser).toBe(false);
+  });
+
+  it('treats restricted capability getters as unavailable', () => {
+    const browserWindow = {};
+    const browserNavigator = {};
+    const webCrypto = {};
+    Object.defineProperty(browserWindow, 'isSecureContext', {
+      get: () => {
+        throw new TypeError('blocked secure-context getter');
+      },
+    });
+    Object.defineProperty(browserNavigator, 'serviceWorker', {
+      get: () => {
+        throw new TypeError('blocked service-worker getter');
+      },
+    });
+    Object.defineProperty(webCrypto, 'subtle', {
+      get: () => {
+        throw new TypeError('blocked crypto getter');
+      },
+    });
+    vi.stubGlobal('window', browserWindow);
+    vi.stubGlobal('document', {});
+    vi.stubGlobal('navigator', browserNavigator);
+    vi.stubGlobal('crypto', webCrypto);
+
+    expect(() => getBrowserCapabilities()).not.toThrow();
+    expect(getBrowserCapabilities()).toMatchObject({
+      hasServiceWorker: false,
+      hasWebCrypto: false,
+      isBrowser: true,
+      isSecureContext: false,
+    });
+    expect(isFingerprintingSupported()).toBe(false);
+  });
 });
 
 describe('component manifest', () => {

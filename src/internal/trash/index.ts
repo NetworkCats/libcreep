@@ -1,9 +1,8 @@
-// @ts-nocheck
 
 // Detect proxy behavior
-const proxyBehavior = (x) => typeof x == 'function' ? true : false
+const proxyBehavior = (x: unknown): boolean => typeof x == 'function'
 
-const GIBBERS = /[cC]f|[jJ][bcdfghlmprsty]|[qQ][bcdfghjklmnpsty]|[vV][bfhjkmpt]|[xX][dkrz]|[yY]y|[zZ][fr]|[cCxXzZ]j|[bBfFgGjJkKpPvVqQtTwWyYzZ]q|[cCfFgGjJpPqQwW]v|[jJqQvV]w|[bBcCdDfFgGhHjJkKmMpPqQsSvVwWxXzZ]x|[bBfFhHjJkKmMpPqQ]z/g
+const GIBBERS = /[cC]f|[jJ][bcdfghlmprsty]|[qQ][bcdfghjklmnpsty]|[vV][bfhjkmpt]|[xX][dkrz]|[yY]y|[zZ][fr]|[cCxXzZ]j|[bBfFgGjJkKpPvVqQtTwWyYzZ]q|[cCfFgGjJpPqQwW]v|[jJqQvV]w|[bBcCdDfFgGhHjJkKmMpPqQsSvVwWxXzZ]x|[bBfFhHjJkKmMpPqQ]z/
 
 // Detect gibberish
 const gibberish = (str: string, {strict = false} = {}): string[] => {
@@ -67,18 +66,24 @@ const gibberish = (str: string, {strict = false} = {}): string[] => {
 }
 
 // validate
-const isInt = (x) => typeof x == 'number' && x % 1 == 0
-const trustInteger = (name, val) => {
+const isInt = (x: unknown): x is number => typeof x == 'number' && x % 1 == 0
+const trustInteger = (name: string, val: unknown): number | undefined => {
 	const trusted = isInt(val)
 	return trusted ? val : sendToTrash(name, val)
 }
 
 // WebGL Renderer helpers
-function compressWebGLRenderer(x: string): string | undefined {
+function compressWebGLRenderer(x: unknown): string | undefined {
 	if (!x) return
 
-	return (''+x)
-	.replace(/ANGLE \(|\sDirect3D.+|\sD3D.+|\svs_.+\)|\((DRM|POLARIS|LLVM).+|Mesa.+|(ATI|INTEL)-.+|Metal\s-\s.+|NVIDIA\s[\d|\.]+/ig, '')
+	let renderer: string
+	try {
+		renderer = String(x)
+	} catch {
+		return
+	}
+	return renderer
+		.replace(/ANGLE \(|\sDirect3D.+|\sD3D.+|\svs_.+\)|\((DRM|POLARIS|LLVM).+|Mesa.+|(ATI|INTEL)-.+|Metal\s-\s.+|NVIDIA\s[\d.]+/ig, '')
 	.replace(/(\s(ti|\d{1,2}GB|super)$)/ig, '')
 	.replace(/\s{2,}/g, ' ')
 	.trim()
@@ -87,7 +92,7 @@ function compressWebGLRenderer(x: string): string | undefined {
 	})
 }
 
-const getWebGLRendererParts = (x) => {
+const getWebGLRendererParts = (x: unknown): string => {
     const knownParts = [
 		'AMD',
 		'ANGLE',
@@ -151,23 +156,43 @@ const getWebGLRendererParts = (x) => {
 		'Xe Graphics',
 		'llvmpipe',
     ]
-    const parts = [...knownParts].filter((name) => (''+x).includes(name))
+	let renderer
+	try {
+		renderer = String(x)
+	} catch {
+		return ''
+	}
+	const parts = [...knownParts].filter((name) => renderer.includes(name))
     return [...new Set(parts)].sort().join(', ')
 }
 
-const hardenWebGLRenderer = (x) => {
+const hardenWebGLRenderer = (x: unknown): unknown => {
 	const gpuHasKnownParts = getWebGLRendererParts(x).length
 	return gpuHasKnownParts ? compressWebGLRenderer(x) : x
 }
 
-const getWebGLRendererConfidence = (x) => {
+interface WebGLRendererConfidence {
+	parts: string
+	warnings: string[]
+	gibbers: string
+	confidence: 'high' | 'moderate' | 'low'
+	grade: 'A' | 'C' | 'F'
+}
+
+const getWebGLRendererConfidence = (x: unknown): WebGLRendererConfidence | undefined => {
 	if (!x) {
 		return
 	}
-	const parts = getWebGLRendererParts(x)
+	let renderer
+	try {
+		renderer = String(x)
+	} catch {
+		return
+	}
+	const parts = getWebGLRendererParts(renderer)
 	const hasKnownParts = parts.length
-	const hasBlankSpaceNoise = /\s{2,}|^\s|\s$/.test(x)
-	const hasBrokenAngleStructure = /^ANGLE/.test(x) && !(/^ANGLE \((.+)\)/.exec(x)||[])[1]
+	const hasBlankSpaceNoise = /\s{2,}|^\s|\s$/.test(renderer)
+	const hasBrokenAngleStructure = renderer.startsWith('ANGLE') && !(/^ANGLE \((.+)\)/.exec(renderer)||[])[1]
 
 	// https://chromium.googlesource.com/angle/angle/+/83fa18905d8fed4f394e4f30140a83a3e76b1577/src/gpu_info_util/SystemInfo.cpp
 	// https://chromium.googlesource.com/angle/angle/+/83fa18905d8fed4f394e4f30140a83a3e76b1577/src/gpu_info_util/SystemInfo.h
@@ -198,7 +223,7 @@ const getWebGLRendererConfidence = (x) => {
 	}
 	*/
 
-	const gibbers = gibberish(x, { strict: true }).join(', ')
+	const gibbers = gibberish(renderer, { strict: true }).join(', ')
 	const valid = (
 		hasKnownParts && !hasBlankSpaceNoise && !hasBrokenAngleStructure
 	)
@@ -213,15 +238,13 @@ const getWebGLRendererConfidence = (x) => {
 				'F'
 	)
 
-	const warnings = new Set([
-		(hasBlankSpaceNoise ? 'found extra spaces' : undefined),
-		(hasBrokenAngleStructure ? 'broken angle structure' : undefined),
-	])
-	warnings.delete(undefined)
+	const warnings: string[] = []
+	if (hasBlankSpaceNoise) warnings.push('found extra spaces')
+	if (hasBrokenAngleStructure) warnings.push('broken angle structure')
 
 	return {
 		parts,
-		warnings: [...warnings],
+		warnings,
 		gibbers,
 		confidence,
 		grade,
@@ -230,13 +253,13 @@ const getWebGLRendererConfidence = (x) => {
 
 // Collect trash values
 const createTrashBin = () => {
-	const bin = []
+	const bin: unknown[] = []
 	  return {
-			getBin: () => bin,
+				getBin: () => bin.slice(),
 			resetBin: (baseline: unknown[] = []) => {
 				bin.splice(0, bin.length, ...baseline)
 			},
-		sendToTrash: (name, val, response = undefined) => {
+		sendToTrash: <T = undefined>(name: string, val: unknown, response?: T): T | undefined => {
 			const proxyLike = proxyBehavior(val)
 			const value = !proxyLike ? val : 'proxy behavior detected'
 			bin.push({ name, value })

@@ -1,33 +1,30 @@
-// @ts-nocheck
 /* eslint-disable new-cap */
 /* eslint-disable no-unused-vars */
 import { captureError } from '../errors'
 import { IS_BLINK, IS_WEBKIT, IS_GECKO, IS_WORKER_SCOPE } from '../utils/helpers'
-// warm up while we detect lies
-try {
-	speechSynthesis.getVoices()
-} catch (err) {}
 
 // Collect lies detected
 function createLieRecords() {
-	const records: Record<string, string[]> = {}
+	const records: Record<string, string[]> = Object.create(null) as Record<string, string[]>
 	return {
-		getRecords: () => records,
-		resetRecords: (baseline: Record<string, string[]> = {}) => {
+		getRecords: () => Object.fromEntries(Object.entries(records).map(([name, lies]) => [name, [...lies]])),
+		resetRecords: (baseline: Readonly<Record<string, readonly string[]>> = {}) => {
 			Object.keys(records).forEach((name) => delete records[name])
 			Object.entries(baseline).forEach(([name, lies]) => {
 				records[name] = [...lies]
 			})
 		},
-		documentLie: (name: string, lie: string | string[]) => {
-			const isArray = lie instanceof Array
+		documentLie: (name: string, lie: string | readonly string[]): void => {
+				const isArray = Array.isArray(lie)
 			if (records[name]) {
 				if (isArray) {
-					return (records[name] = [...records[name], ...lie])
+					records[name] = [...records[name], ...lie]
+					return
 				}
-				return records[name].push(lie)
+				records[name].push(lie as string)
+				return
 			}
-			return isArray ? (records[name] = lie) : (records[name] = [lie])
+			records[name] = isArray ? [...lie] : [lie as string]
 		},
 	}
 }
@@ -58,18 +55,19 @@ function getBehemothIframe(win: Window): Window | null {
 		div.setAttribute('style', GHOST)
 		div.innerHTML = `<div><iframe></iframe></div>`
 		win.document.body.appendChild(div)
-		const iframe = [...[...div.childNodes][0].childNodes][0] as HTMLIFrameElement
+		const child = div.firstElementChild
+		const iframe = child?.firstElementChild
 
-		if (!iframe) return null
+		if (!iframe || iframe.localName != 'iframe') return null
 
-		const { contentWindow } = iframe || {}
+		const { contentWindow } = iframe as HTMLIFrameElement
 		if (!contentWindow) return null
 
 		const div2 = contentWindow.document.createElement('div')
 		div2.innerHTML = `<div><iframe></iframe></div>`
 		contentWindow.document.body.appendChild(div2)
-		const iframe2 = [...[...div2.childNodes][0].childNodes][0] as HTMLIFrameElement
-		return iframe2.contentWindow
+		const iframe2 = div2.firstElementChild?.firstElementChild
+		return iframe2?.localName == 'iframe' ? (iframe2 as HTMLIFrameElement).contentWindow : null
 	} catch (error) {
 		captureError(error, 'client blocked behemoth iframe')
 		return win
@@ -79,32 +77,56 @@ function getBehemothIframe(win: Window): Window | null {
 const RAND = getRandomValues()
 const HAS_REFLECT = 'Reflect' in self
 
-function isTypeError(err:any): boolean {
-	return err.constructor.name == 'TypeError'
-}
-
-interface ErrorTrap {
-	spawnErr: Function,
-	withStack?: Function,
-	final?: Function
-}
-function failsTypeError({ spawnErr, withStack, final }: ErrorTrap): boolean {
+function isTypeError(err: unknown): boolean {
 	try {
-		spawnErr()
-		throw Error()
-	} catch (err: any) {
-		if (!isTypeError(err)) return true
-		return withStack ? withStack(err) : false
-	} finally {
-		final && final()
+		return err?.constructor?.name == 'TypeError'
+	} catch (error) {
+		return false
 	}
 }
 
-function failsWithError(fn: Function): boolean {
+interface ErrorTrap {
+	spawnErr: () => unknown
+	withStack?: (error: unknown) => boolean
+	final?: () => unknown
+}
+function failsTypeError({ spawnErr, withStack, final }: ErrorTrap): boolean {
+	let failed = false
+	try {
+		spawnErr()
+		failed = true
+	} catch (err: unknown) {
+		try {
+			failed = !isTypeError(err) || (withStack?.(err) ?? false)
+		} catch {
+			failed = true
+		}
+	} finally {
+		try {
+			final?.()
+		} catch {
+			failed = true
+		}
+	}
+	return failed
+}
+
+function restorePrototype(target: object, prototype: object | null): void {
+	let restored = false
+	try {
+		restored = Reflect.setPrototypeOf(target, prototype)
+	} catch {}
+	if (!restored) {
+		Object.setPrototypeOf(target, prototype)
+	}
+	if (Object.getPrototypeOf(target) !== prototype) throw new TypeError('prototype restoration failed')
+}
+
+function failsWithError(fn: () => unknown): boolean {
 	try {
 		fn()
 		return false
-	} catch (err: any) {
+	} catch {
 		return true
 	}
 }
@@ -120,9 +142,20 @@ function hasKnownToString(name: string) {
 	}
 }
 
-function hasValidStack(err: any, reg: RegExp, i: number = 1) {
-	if (i === 0) return reg.test(err.message)
-	return reg.test(err.stack.split('\n')[i])
+function hasValidStack(err: unknown, reg: RegExp, i: number = 1): boolean {
+	const value = readErrorValue(err, i === 0 ? 'message' : 'stack')
+	if (i === 0) return reg.test(value)
+	return reg.test(value.split('\n')[i] || '')
+}
+
+function readErrorValue(error: unknown, property: 'message' | 'stack'): string {
+	try {
+		if (error == null || (typeof error != 'object' && typeof error != 'function')) return String(error)
+		const value = Reflect.get(error, property)
+		return typeof value == 'string' ? value : String(value ?? '')
+	} catch {
+		return ''
+	}
 }
 
 const AT_FUNCTION = /at Function\.toString /
@@ -132,11 +165,13 @@ const PROXY_INSTANCE = /at (Proxy\.)?\[Symbol.hasInstance\]/ // useful if < Chro
 const STRICT_MODE = /strict mode/
 
 // API Function Test
+type ApiFunction = (...args: never[]) => unknown
+
 interface LiesConfig {
 	scope: Window & typeof globalThis,
-	apiFunction: Function
-	proto: any
-	obj: any
+	apiFunction: ApiFunction
+	proto: object
+	obj: object | null
 	lieProps: Record<string, string[]>
 }
 interface LieResult {
@@ -157,46 +192,48 @@ function queryLies({
 		}
 	}
 	const name = apiFunction.name.replace(/get\s/, '')
-	const objName = obj?.name
+	const objName = obj == null ? undefined : Reflect.get(obj, 'name')
 	const nativeProto = Object.getPrototypeOf(apiFunction)
+	const restoreApiFunction = () => restorePrototype(apiFunction, nativeProto)
+	const interfaceInstance = typeof objName == 'string' ? Reflect.get(scope, objName.toLowerCase()) : undefined
+	const hasInterfaceInstance = interfaceInstance != null &&
+		(typeof interfaceInstance == 'object' || typeof interfaceInstance == 'function')
 	let lies: Record<string, boolean> = {
 		// custom lie string names
 		['failed illegal error']: !!obj && failsTypeError({
-			spawnErr: () => obj.prototype[name],
+			spawnErr: () => Reflect.get(Reflect.get(obj, 'prototype'), name),
 		}),
 		['failed undefined properties']: (
-			!!obj && /^(screen|navigator)$/i.test(objName) && !!(
-				Object.getOwnPropertyDescriptor(self[objName.toLowerCase()], name) || (
+			!!obj && typeof objName == 'string' && /^(screen|navigator)$/i.test(objName) && hasInterfaceInstance && !!(
+				Object.getOwnPropertyDescriptor(interfaceInstance, name) || (
 					HAS_REFLECT &&
-					Reflect.getOwnPropertyDescriptor(self[objName.toLowerCase()], name)
+					Reflect.getOwnPropertyDescriptor(interfaceInstance, name)
 				)
 			)
 		),
 		['failed call interface error']: failsTypeError({
 			spawnErr: () => {
-				// @ts-expect-error
-				new apiFunction(); apiFunction.call(proto)
+				Reflect.construct(apiFunction, []); Reflect.apply(apiFunction, proto, [])
 			},
 		}),
 		['failed apply interface error']: failsTypeError({
 			spawnErr: () => {
-				// @ts-expect-error
-				new apiFunction(); apiFunction.apply(proto)
+				Reflect.construct(apiFunction, []); Reflect.apply(apiFunction, proto, [])
 			},
 		}),
 		['failed new instance error']: failsTypeError({
-			// @ts-expect-error
-			spawnErr: () => new apiFunction(),
+			spawnErr: () => Reflect.construct(apiFunction, []),
 		}),
 		['failed class extends error']: !IS_WEBKIT && failsTypeError({
 			spawnErr: () => {
-				// @ts-expect-error
-				class Fake extends apiFunction { }
+				const ApiConstructor = apiFunction as unknown as new (...args: never[]) => object
+				class Fake extends ApiConstructor { }
+				void Fake
 			},
 		}),
 		['failed null conversion error']: failsTypeError({
 			spawnErr: () => Object.setPrototypeOf(apiFunction, null).toString(),
-			final: () => Object.setPrototypeOf(apiFunction, nativeProto),
+			final: restoreApiFunction,
 		}),
 		['failed toString']: (
 			!hasKnownToString(name)[scope.Function.prototype.toString.call(apiFunction)] ||
@@ -214,10 +251,10 @@ function queryLies({
 			Reflect.getOwnPropertyDescriptor(apiFunction, 'toString')
 		),
 		['failed own property']: !!(
-			apiFunction.hasOwnProperty('arguments') ||
-			apiFunction.hasOwnProperty('caller') ||
-			apiFunction.hasOwnProperty('prototype') ||
-			apiFunction.hasOwnProperty('toString')
+			Object.prototype.hasOwnProperty.call(apiFunction, 'arguments') ||
+			Object.prototype.hasOwnProperty.call(apiFunction, 'caller') ||
+			Object.prototype.hasOwnProperty.call(apiFunction, 'prototype') ||
+			Object.prototype.hasOwnProperty.call(apiFunction, 'toString')
 		),
 		['failed descriptor keys']: (
 			Object.keys(Object.getOwnPropertyDescriptors(apiFunction)).sort().toString() != 'length,name'
@@ -226,36 +263,38 @@ function queryLies({
 			Object.getOwnPropertyNames(apiFunction).sort().toString() != 'length,name'
 		),
 		['failed own keys names']: HAS_REFLECT && (
-			Reflect.ownKeys(apiFunction).sort().toString() != 'length,name'
+			Reflect.ownKeys(apiFunction).map(String).sort().toString() != 'length,name'
 		),
 		// Proxy Detection
 		['failed object toString error']: (
 			failsTypeError({
 				spawnErr: () => Object.create(apiFunction).toString(),
-				withStack: (err: any) => IS_BLINK && !hasValidStack(err, AT_FUNCTION),
+				withStack: (err: unknown) => IS_BLINK && !hasValidStack(err, AT_FUNCTION),
 			}) ||
 			failsTypeError({
 				spawnErr: () => Object.create(new Proxy(apiFunction, {})).toString(),
-				withStack: (err: any) => IS_BLINK && !hasValidStack(err, AT_OBJECT),
+				withStack: (err: unknown) => IS_BLINK && !hasValidStack(err, AT_OBJECT),
 			})
 		),
 		['failed at incompatible proxy error']: failsTypeError({
 			spawnErr: () => {
-				apiFunction.arguments; apiFunction.caller
-			},
-			withStack: (err: any) => IS_GECKO && !hasValidStack(err, STRICT_MODE, 0),
+					Reflect.get(apiFunction, 'arguments')
+					Reflect.get(apiFunction, 'caller')
+				},
+				withStack: (err: unknown) => IS_GECKO && !hasValidStack(err, STRICT_MODE, 0),
 		}),
 		['failed at toString incompatible proxy error']: failsTypeError({
 			spawnErr: () => {
-				apiFunction.toString.arguments; apiFunction.toString.caller
-			},
-			withStack: (err: any) => IS_GECKO && !hasValidStack(err, STRICT_MODE, 0),
+					Reflect.get(apiFunction.toString, 'arguments')
+					Reflect.get(apiFunction.toString, 'caller')
+				},
+				withStack: (err: unknown) => IS_GECKO && !hasValidStack(err, STRICT_MODE, 0),
 		}),
 		['failed at too much recursion error']: failsTypeError({
 			spawnErr: () => {
 				Object.setPrototypeOf(apiFunction, Object.create(apiFunction)).toString()
 			},
-			final: () => Object.setPrototypeOf(apiFunction, nativeProto),
+			final: restoreApiFunction,
 		}),
 	}
 
@@ -267,67 +306,68 @@ function queryLies({
 	)
 	if (detectProxies) {
 		const proxy1 = new Proxy(apiFunction, {})
-		// `proxy2++` exercises recursive coercion below. `let` preserves that
-		// runtime probe while remaining valid for strict static bundlers.
-		let proxy2 = new Proxy(apiFunction, {})
+		const proxy2 = new Proxy(apiFunction, {})
 		const proxy3 = new Proxy(apiFunction, {})
 
 		lies = {
 			...lies,
 			// Advanced Proxy Detection
-			['failed at too much recursion __proto__ error']: !failsTypeError({
-				spawnErr: () => {
-					// @ts-expect-error
-					apiFunction.__proto__ = proxy; apiFunction++
+				['failed at too much recursion __proto__ error']: !failsTypeError({
+					spawnErr: () => {
+					Reflect.set(apiFunction, '__proto__', proxy1)
+					Number(apiFunction)
 				},
-				final: () => Object.setPrototypeOf(apiFunction, nativeProto),
+				final: restoreApiFunction,
 			}),
 			['failed at chain cycle error']: !failsTypeError({
 				spawnErr: () => {
 					Object.setPrototypeOf(proxy1, Object.create(proxy1)).toString()
 				},
-				final: () => Object.setPrototypeOf(proxy1, nativeProto),
+				final: () => restorePrototype(proxy1, nativeProto),
 			}),
 			['failed at chain cycle __proto__ error']: !failsTypeError({
 				spawnErr: () => {
-					// @ts-expect-error
-					proxy2.__proto__ = proxy2; proxy2++
+					Reflect.set(proxy2, '__proto__', proxy2)
+					Number(proxy2)
 				},
-				final: () => Object.setPrototypeOf(proxy2, nativeProto),
+				final: () => restorePrototype(proxy2, nativeProto),
 			}),
 			['failed at reflect set proto']: HAS_REFLECT && failsTypeError({
 				spawnErr: () => {
 					Reflect.setPrototypeOf(apiFunction, Object.create(apiFunction))
-					RAND in apiFunction
+					void (RAND in apiFunction)
 					throw new TypeError()
 				},
-				final: () => Object.setPrototypeOf(apiFunction, nativeProto),
+				final: restoreApiFunction,
 			}),
 			['failed at reflect set proto proxy']: HAS_REFLECT && !failsTypeError({
 				spawnErr: () => {
 					Reflect.setPrototypeOf(proxy3, Object.create(proxy3))
-					RAND in proxy3
+					void (RAND in proxy3)
 				},
-				final: () => Object.setPrototypeOf(proxy3, nativeProto),
+				final: () => restorePrototype(proxy3, nativeProto),
 			}),
 			['failed at instanceof check error']: IS_BLINK && (
 				failsTypeError({
 					spawnErr: () => {
-						apiFunction instanceof apiFunction
+					void (apiFunction instanceof apiFunction)
 					},
-					withStack: (err: any) => !hasValidStack(err, FUNCTION_INSTANCE),
+					withStack: (err: unknown) => !hasValidStack(err, FUNCTION_INSTANCE),
 				}) ||
 				failsTypeError({
 					spawnErr: () => {
 						const proxy = new Proxy(apiFunction, {})
-						proxy instanceof proxy
+					void (proxy instanceof proxy)
 					},
-					withStack: (err: any) => !hasValidStack(err, PROXY_INSTANCE),
+					withStack: (err: unknown) => !hasValidStack(err, PROXY_INSTANCE),
 				})
 			),
-			['failed at define properties']: IS_BLINK && HAS_REFLECT && failsWithError(() => {
-				Object.defineProperty(apiFunction, '', { configurable: true }).toString()
-				Reflect.deleteProperty(apiFunction, '')
+				['failed at define properties']: IS_BLINK && HAS_REFLECT && failsWithError(() => {
+					try {
+						Object.defineProperty(apiFunction, '', { configurable: true }).toString()
+					} finally {
+						Reflect.deleteProperty(apiFunction, '')
+					}
 			}),
 		}
 	}
@@ -339,59 +379,61 @@ function queryLies({
 }
 
 interface SearchConfig {
-	target?: string[] | undefined
-	ignore?: string[] | undefined
+	target?: readonly string[]
+	ignore?: readonly string[]
 }
 function createLieDetector(scope: Window & typeof globalThis) {
-	const isSupported = (obj: any) => typeof obj != 'undefined' && !!obj
+	const isSupported = (obj: unknown): obj is object => obj != null && (typeof obj == 'object' || typeof obj == 'function')
 	const props: Record<string, string[]> = {} // lie list and detail
 	const propsSearched: string[] = [] // list of properties searched
 	return {
-		getProps: () => props,
-		getPropsSearched: () => propsSearched,
-		searchLies: (fn: Function, config?: SearchConfig): void => {
+		getProps: () => Object.fromEntries(Object.entries(props).map(([name, lies]) => [name, [...lies]])),
+		getPropsSearched: () => [...propsSearched],
+		searchLies: (fn: () => unknown, config?: SearchConfig): void => {
 			const { target, ignore } = config || {}
-			let obj: any
+			let obj: object
 			// check if api is blocked or not supported
 			try {
-				obj = fn()
-				if (!isSupported(obj)) {
+				const value = fn()
+				if (!isSupported(value)) {
 					return
 				}
+				obj = value
 			} catch (error) {
 				return
 			}
 
-			const interfaceObject = !!obj.prototype ? obj.prototype : obj
+			const prototype = Reflect.get(obj, 'prototype')
+			const interfaceObject = isSupported(prototype) ? prototype : obj
+			const targetSet = target ? new Set(target) : undefined
+			const ignoreSet = ignore ? new Set(ignore) : undefined
 			;[...new Set([
 				...Object.getOwnPropertyNames(interfaceObject),
 				...Object.keys(interfaceObject), // backup
 			])].sort().forEach((name) => {
 				const skip = (
 					name == 'constructor' ||
-					(target && !new Set(target).has(name)) ||
-					(ignore && new Set(ignore).has(name))
+					(targetSet && !targetSet.has(name)) ||
+					(ignoreSet && ignoreSet.has(name))
 				)
 				if (skip) return
 
 				const objectNameString = /\s(.+)\]/
-				const apiName = `${
-					obj.name ? obj.name :
-						objectNameString.test(obj) ? objectNameString.exec(obj)?.[1] :
-							undefined
-				}.${name}`
+				const declaredName = Reflect.get(obj, 'name')
+				const tag = Object.prototype.toString.call(obj)
+				const apiName = `${typeof declaredName == 'string' && declaredName ? declaredName : objectNameString.exec(tag)?.[1] ?? 'Unknown'}.${name}`
 				propsSearched.push(apiName)
 				try {
-					const proto = obj.prototype ? obj.prototype : obj
-					let res // response from getLies
+					const proto = interfaceObject
+					let res: LieResult
 
 					// search if function
 					try {
-						const apiFunction = proto[name] // may trigger TypeError
+						const apiFunction: unknown = Reflect.get(proto, name) // may trigger TypeError
 						if (typeof apiFunction == 'function') {
 							res = queryLies({
 								scope,
-								apiFunction: proto[name],
+								apiFunction: apiFunction as ApiFunction,
 								proto,
 								obj: null,
 								lieProps: props,
@@ -407,7 +449,7 @@ function createLieDetector(scope: Window & typeof globalThis) {
 						if (
 							name != 'name' &&
 							name != 'length' &&
-							name[0] !== name[0].toUpperCase()) {
+							name.charAt(0) !== name.charAt(0).toUpperCase()) {
 							const lie = ['failed descriptor.value undefined']
 							documentLie(apiName, lie)
 							return (
@@ -416,8 +458,8 @@ function createLieDetector(scope: Window & typeof globalThis) {
 						}
 					} catch (error) { }
 					// else search getter function
-					// @ts-ignore
-					const getterFunction = Object.getOwnPropertyDescriptor(proto, name).get!
+					const getterFunction = Object.getOwnPropertyDescriptor(proto, name)?.get
+					if (typeof getterFunction != 'function') return
 					res = queryLies({
 						scope,
 						apiFunction: getterFunction,
@@ -449,49 +491,64 @@ interface Phantom {
 }
 function getPhantomIframe(): Phantom {
 	if (IS_WORKER_SCOPE) return { iframeWindow: self }
+	let div: HTMLDivElement | undefined
 	try {
-		const numberOfIframes = self.length
-		const frag = new DocumentFragment()
-		const div = document.createElement('div')
+		const frag = document.createDocumentFragment()
+		div = document.createElement('div')
 		const id = getRandomValues()
 		div.setAttribute('id', id)
 		frag.appendChild(div)
 		div.innerHTML = `<div style="${GHOST}"><iframe></iframe></div>`
 		document.body.appendChild(frag)
-		const iframeWindow = self[numberOfIframes]
+		const iframeWindow = div.querySelector('iframe')?.contentWindow
+		if (!iframeWindow) return { iframeWindow: self, div }
 		const phantomWindow = getBehemothIframe(iframeWindow)
 		return { iframeWindow: phantomWindow || self, div }
 	} catch (error) {
 		captureError(error, 'client blocked phantom iframe')
-		return { iframeWindow: self }
+		return { iframeWindow: self, div }
 	}
 }
-let PHANTOM_DARKNESS: Window
+let PHANTOM_DARKNESS: Window = self as Window
 let PARENT_PHANTOM: HTMLDivElement | undefined
 
 function renewPhantom(): void {
-	if (PARENT_PHANTOM?.isConnected && PHANTOM_DARKNESS?.document?.body) return
+	try {
+		if (PARENT_PHANTOM?.isConnected && PHANTOM_DARKNESS?.document?.body) return
+	} catch {}
+	removePhantom()
 	const phantom = getPhantomIframe()
 	PHANTOM_DARKNESS = phantom.iframeWindow
 	PARENT_PHANTOM = phantom.div
 }
 
 function removePhantom(): void {
-	PARENT_PHANTOM?.remove()
+	const parent = PARENT_PHANTOM
+	try {
+		parent?.remove()
+	} catch {
+		try {
+			if (parent?.parentNode) parent.parentNode.removeChild(parent)
+		} catch {}
+	}
 	PARENT_PHANTOM = undefined
+	PHANTOM_DARKNESS = self as Window
 }
-
-renewPhantom()
 
 function getPrototypeLies(scope: Window & typeof globalThis) {
 	const lieDetector = createLieDetector(scope)
 	const {
 		searchLies,
 	} = lieDetector
+	const getRealmValue = (name: string): unknown => Reflect.get(scope, name)
+	const getRealmProperty = (parent: string, property: string): unknown => {
+		const value: unknown = getRealmValue(parent)
+		return value != null && (typeof value == 'object' || typeof value == 'function') ? Reflect.get(value, property) : undefined
+	}
 
 	// search lies: remove target to search all properties
 	// test Function.toString first to determine the depth of the search
-	searchLies(() => Function, {
+	searchLies(() => getRealmValue('Function'), {
 		target: [
 			'toString',
 		],
@@ -501,19 +558,19 @@ function getPrototypeLies(scope: Window & typeof globalThis) {
 		],
 	})
 	// other APIs
-	searchLies(() => AnalyserNode)
-	searchLies(() => AudioBuffer, {
+	searchLies(() => getRealmValue('AnalyserNode'))
+	searchLies(() => getRealmValue('AudioBuffer'), {
 		target: [
 			'copyFromChannel',
 			'getChannelData',
 		],
 	})
-	searchLies(() => BiquadFilterNode, {
+	searchLies(() => getRealmValue('BiquadFilterNode'), {
 		target: [
 			'getFrequencyResponse',
 		],
 	})
-	searchLies(() => CanvasRenderingContext2D, {
+	searchLies(() => getRealmValue('CanvasRenderingContext2D'), {
 		target: [
 			'getImageData',
 			'getLineDash',
@@ -526,18 +583,17 @@ function getPrototypeLies(scope: Window & typeof globalThis) {
 			'font',
 		],
 	})
-	searchLies(() => CSSStyleDeclaration, {
+	searchLies(() => getRealmValue('CSSStyleDeclaration'), {
 		target: [
 			'setProperty',
 		],
 	})
-	// @ts-expect-error
-	searchLies(() => CSS2Properties, { // Gecko
+	searchLies(() => getRealmValue('CSS2Properties'), { // Gecko
 		target: [
 			'setProperty',
 		],
 	})
-	searchLies(() => Date, {
+	searchLies(() => getRealmValue('Date'), {
 		target: [
 			'getDate',
 			'getDay',
@@ -564,19 +620,17 @@ function getPrototypeLies(scope: Window & typeof globalThis) {
 			'valueOf',
 		],
 	})
-	// @ts-expect-error if not supported
-	searchLies(() => GPU, {
+	searchLies(() => getRealmValue('GPU'), {
 		target: [
 			'requestAdapter',
 		],
 	})
-	// @ts-expect-error if not supported
-	searchLies(() => GPUAdapter, {
+	searchLies(() => getRealmValue('GPUAdapter'), {
 		target: [
 			'requestAdapterInfo',
 		],
 	})
-	searchLies(() => Intl.DateTimeFormat, {
+	searchLies(() => getRealmProperty('Intl', 'DateTimeFormat'), {
 		target: [
 			'format',
 			'formatRange',
@@ -584,7 +638,7 @@ function getPrototypeLies(scope: Window & typeof globalThis) {
 			'resolvedOptions',
 		],
 	})
-	searchLies(() => Document, {
+	searchLies(() => getRealmValue('Document'), {
 		target: [
 			'createElement',
 			'createElementNS',
@@ -604,9 +658,9 @@ function getPrototypeLies(scope: Window & typeof globalThis) {
 			'onmouseleave',
 		],
 	})
-	searchLies(() => DOMRect)
-	searchLies(() => DOMRectReadOnly)
-	searchLies(() => Element, {
+	searchLies(() => getRealmValue('DOMRect'))
+	searchLies(() => getRealmValue('DOMRectReadOnly'))
+	searchLies(() => getRealmValue('Element'), {
 		target: [
 			'append',
 			'appendChild',
@@ -622,15 +676,15 @@ function getPrototypeLies(scope: Window & typeof globalThis) {
 			'setAttribute',
 		],
 	})
-	searchLies(() => FontFace, {
+	searchLies(() => getRealmValue('FontFace'), {
 		target: [
 			'family',
 			'load',
 			'status',
 		],
 	})
-	searchLies(() => HTMLCanvasElement)
-	searchLies(() => HTMLElement, {
+	searchLies(() => getRealmValue('HTMLCanvasElement'))
+	searchLies(() => getRealmValue('HTMLElement'), {
 		target: [
 			'clientHeight',
 			'clientWidth',
@@ -645,20 +699,20 @@ function getPrototypeLies(scope: Window & typeof globalThis) {
 			'onmouseleave',
 		],
 	})
-	searchLies(() => HTMLIFrameElement, {
+	searchLies(() => getRealmValue('HTMLIFrameElement'), {
 		target: [
 			'contentDocument',
 			'contentWindow',
 		],
 	})
-	searchLies(() => IntersectionObserverEntry, {
+	searchLies(() => getRealmValue('IntersectionObserverEntry'), {
 		target: [
 			'boundingClientRect',
 			'intersectionRect',
 			'rootBounds',
 		],
 	})
-	searchLies(() => Math, {
+	searchLies(() => getRealmValue('Math'), {
 		target: [
 			'acos',
 			'acosh',
@@ -681,14 +735,14 @@ function getPrototypeLies(scope: Window & typeof globalThis) {
 			'tanh',
 		],
 	})
-	searchLies(() => MediaDevices, {
+	searchLies(() => getRealmValue('MediaDevices'), {
 		target: [
 			'enumerateDevices',
 			'getDisplayMedia',
 			'getUserMedia',
 		],
 	})
-	searchLies(() => Navigator, {
+	searchLies(() => getRealmValue('Navigator'), {
 		target: [
 			'appCodeName',
 			'appName',
@@ -719,22 +773,20 @@ function getPrototypeLies(scope: Window & typeof globalThis) {
 			'gpu',
 		],
 	})
-	searchLies(() => Node, {
+	searchLies(() => getRealmValue('Node'), {
 		target: [
 			'appendChild',
 			'insertBefore',
 			'replaceChild',
 		],
 	})
-	// @ts-expect-error
-	searchLies(() => OffscreenCanvas, {
+	searchLies(() => getRealmValue('OffscreenCanvas'), {
 		target: [
 			'convertToBlob',
 			'getContext',
 		],
 	})
-	// @ts-expect-error
-	searchLies(() => OffscreenCanvasRenderingContext2D, {
+	searchLies(() => getRealmValue('OffscreenCanvasRenderingContext2D'), {
 		target: [
 			'getImageData',
 			'getLineDash',
@@ -745,61 +797,60 @@ function getPrototypeLies(scope: Window & typeof globalThis) {
 			'font',
 		],
 	})
-	searchLies(() => Permissions, {
+	searchLies(() => getRealmValue('Permissions'), {
 		target: [
 			'query',
 		],
 	})
-	searchLies(() => Range, {
+	searchLies(() => getRealmValue('Range'), {
 		target: [
 			'getBoundingClientRect',
 			'getClientRects',
 		],
 	})
-	// @ts-expect-error
-	searchLies(() => Intl.RelativeTimeFormat, {
+	searchLies(() => getRealmProperty('Intl', 'RelativeTimeFormat'), {
 		target: [
 			'resolvedOptions',
 		],
 	})
-	searchLies(() => Screen)
-	searchLies(() => speechSynthesis, {
+	searchLies(() => getRealmValue('Screen'))
+	searchLies(() => getRealmValue('speechSynthesis'), {
 		target: [
 			'getVoices',
 		],
 	})
-	searchLies(() => String, {
+	searchLies(() => getRealmValue('String'), {
 		target: [
 			'fromCodePoint',
 		],
 	})
-	searchLies(() => StorageManager, {
+	searchLies(() => getRealmValue('StorageManager'), {
 		target: [
 			'estimate',
 		],
 	})
-	searchLies(() => SVGRect)
-	searchLies(() => SVGRectElement, {
+	searchLies(() => getRealmValue('SVGRect'))
+	searchLies(() => getRealmValue('SVGRectElement'), {
 		target: [
 			'getBBox',
 		],
 	})
-	searchLies(() => SVGTextContentElement, {
+	searchLies(() => getRealmValue('SVGTextContentElement'), {
 		target: [
 			'getExtentOfChar',
 			'getSubStringLength',
 			'getComputedTextLength',
 		],
 	})
-	searchLies(() => TextMetrics)
-	searchLies(() => WebGLRenderingContext, {
+	searchLies(() => getRealmValue('TextMetrics'))
+	searchLies(() => getRealmValue('WebGLRenderingContext'), {
 		target: [
 			'bufferData',
 			'getParameter',
 			'readPixels',
 		],
 	})
-	searchLies(() => WebGL2RenderingContext, {
+	searchLies(() => getRealmValue('WebGL2RenderingContext'), {
 		target: [
 			'bufferData',
 			'getParameter',
@@ -824,47 +875,55 @@ function getPrototypeLies(scope: Window & typeof globalThis) {
 		lieDetector,
 		lieList: Object.keys(props).sort(),
 		lieDetail: props,
-		lieCount: Object.keys(props).reduce((acc, key) => acc + props[key].length, 0),
+		lieCount: Object.keys(props).reduce((acc, key) => acc + (props[key]?.length ?? 0), 0),
 		propsSearched,
 	}
 }
 
-// start program
-const start = performance.now()
-const {
-	lieDetector,
-	lieList,
-	lieDetail,
-	// lieCount,
-	propsSearched,
-} = getPrototypeLies(PHANTOM_DARKNESS as Window & typeof globalThis) // execute and destructure the list and detail
-
 // disregard Function.prototype.toString lies when determining if the API can be trusted
-const getNonFunctionToStringLies = (x: string[]) => !x ? x : x.filter((x) => !/object toString|toString incompatible proxy/.test(x)).length
+const getNonFunctionToStringLies = (lies: readonly string[] | undefined): number =>
+	lies?.filter((lie) => !/object toString|toString incompatible proxy/.test(lie)).length ?? 0
 
-let lieProps: Record<string, number>
-let prototypeLies
+let lieProps: Record<string, number> = {}
+let prototypeLies: Record<string, string[]> = {}
 let PROTO_BENCHMARK = 0
-if (!IS_WORKER_SCOPE) {
-	lieProps = (() => {
+
+function initializePrototypeLies(): number {
+	if (IS_WORKER_SCOPE) return 0
+
+	lieProps = {}
+	prototypeLies = {}
+	PROTO_BENCHMARK = 0
+	try {
+		// Voice discovery is intentionally warmed only as part of an explicit
+		// collection. Importing the library must not touch browser detectors.
+		try {
+			speechSynthesis.getVoices()
+		} catch (error) {}
+
+		renewPhantom()
+		const start = performance.now()
+		const {
+			lieDetector,
+			lieDetail,
+		} = getPrototypeLies(PHANTOM_DARKNESS as Window & typeof globalThis)
 		const props = lieDetector.getProps()
-		return Object.keys(props).reduce((acc, key) => {
+		lieProps = Object.keys(props).reduce((acc, key) => {
 			acc[key] = getNonFunctionToStringLies(props[key])
 			return acc
 		}, {} as Record<string, number>)
-	})()
-
-	prototypeLies = JSON.parse(JSON.stringify(lieDetail))
-	const perf = performance.now() - start
-
-	PROTO_BENCHMARK = +perf.toFixed(2)
-	const message = `${propsSearched.length} API properties analyzed in ${PROTO_BENCHMARK}ms (${lieList.length} corrupted)`
-	void message
+		prototypeLies = Object.fromEntries(Object.entries(lieDetail).map(([name, lies]) => [name, [...lies]]))
+		PROTO_BENCHMARK = +(performance.now() - start).toFixed(2)
+		return PROTO_BENCHMARK
+	} catch (error) {
+		captureError(error, 'prototype lie analysis failed')
+		removePhantom()
+		throw error
+	}
 }
-removePhantom()
 
 const getPluginLies = (plugins: PluginArray, mimeTypes: MimeTypeArray) => {
-	const lies = [] // collect lie types
+	const lies: string[] = [] // collect lie types
 	const pluginsOwnPropertyNames = Object.getOwnPropertyNames(plugins).filter((name) => isNaN(+name))
 	const mimeTypesOwnPropertyNames = Object.getOwnPropertyNames(mimeTypes).filter((name) => isNaN(+name))
 
@@ -876,12 +935,12 @@ const getPluginLies = (plugins: PluginArray, mimeTypes: MimeTypeArray) => {
 	const trustedMimeTypes = new Set(mimeTypesOwnPropertyNames)
 
 	// get initial trusted plugin names
-	const excludeDuplicates = (arr: any[]) => [...new Set(arr)]
+	const excludeDuplicates = <T>(values: readonly T[]): T[] => [...new Set(values)]
 	const mimeTypeEnabledPlugins = excludeDuplicates(
 		mimeTypesList.map((mimeType) => mimeType.enabledPlugin),
 	)
 	const trustedPluginNames = new Set(pluginsOwnPropertyNames)
-	const mimeTypeEnabledPluginsNames = mimeTypeEnabledPlugins.map((plugin) => plugin && plugin.name)
+	const mimeTypeEnabledPluginsNames = mimeTypeEnabledPlugins.map((plugin) => plugin?.name)
 	const trustedPluginNamesArray = [...trustedPluginNames]
 	trustedPluginNamesArray.forEach((name) => {
 		const validName = new Set(mimeTypeEnabledPluginsNames).has(name)
@@ -893,7 +952,8 @@ const getPluginLies = (plugins: PluginArray, mimeTypes: MimeTypeArray) => {
 	// 3. Expect MimeType object in plugins
 	const invalidPlugins = pluginsList.filter((plugin) => {
 		try {
-			const validMimeType = Object.getPrototypeOf(plugin[0]).constructor.name == 'MimeType'
+			const firstMimeType = plugin[0]
+			const validMimeType = firstMimeType !== undefined && Object.getPrototypeOf(firstMimeType).constructor.name == 'MimeType'
 			if (!validMimeType) {
 				trustedPluginNames.delete(plugin.name)
 			}
@@ -908,9 +968,8 @@ const getPluginLies = (plugins: PluginArray, mimeTypes: MimeTypeArray) => {
 	}
 
 	// 4. Expect valid MimeType(s) in plugin
-	const pluginMimeTypes = pluginsList
-		.map((plugin) => Object.values(plugin)).flat()
-	const pluginMimeTypesNames = pluginMimeTypes.map((mimetype: MimeType) => mimetype.type)
+	const pluginMimeTypes = pluginsList.flatMap((plugin) => [...plugin])
+	const pluginMimeTypesNames = pluginMimeTypes.map((mimeType) => mimeType.type)
 	pluginMimeTypesNames.forEach((name) => {
 		const validName = trustedMimeTypes.has(name)
 		if (!validName) {
@@ -919,7 +978,7 @@ const getPluginLies = (plugins: PluginArray, mimeTypes: MimeTypeArray) => {
 	})
 
 	pluginsList.forEach((plugin) => {
-		const pluginMimeTypes = Object.values(plugin).map((mimetype) => mimetype.type)
+		const pluginMimeTypes = [...plugin].map((mimeType) => mimeType.type)
 		return pluginMimeTypes.forEach((mimetype) => {
 			if (!trustedMimeTypes.has(mimetype)) {
 				lies.push('invalid mimetype')
@@ -939,10 +998,10 @@ const getPluginLies = (plugins: PluginArray, mimeTypes: MimeTypeArray) => {
 const getLies = () => {
 	const records = lieRecords.getRecords()
 	const totalLies = Object.keys(records).reduce((acc, key) => {
-		acc += records[key].length
+		acc += records[key]?.length ?? 0
 		return acc
 	}, 0)
 	return { data: records, totalLies }
 }
 
-export { getRandomValues, documentLie, createLieDetector, PHANTOM_DARKNESS, PARENT_PHANTOM, renewPhantom, removePhantom, lieProps, prototypeLies, lieRecords, getLies, getPluginLies, PROTO_BENCHMARK }
+export { getRandomValues, documentLie, createLieDetector, PHANTOM_DARKNESS, PARENT_PHANTOM, renewPhantom, removePhantom, initializePrototypeLies, lieProps, prototypeLies, lieRecords, getLies, getPluginLies, PROTO_BENCHMARK }

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { captureError } from '../errors'
 import { PHANTOM_DARKNESS, documentLie } from '../lies'
 import { sendToTrash } from '../trash'
@@ -26,24 +25,14 @@ const getStableFeatures = () => ({
 	},
 })
 
-// @ts-ignore
-const getListDiff = ({oldList, newList, removeCamelCase = false} = {}) => {
-	const oldSet = new Set(oldList)
-	const newSet = new Set(newList)
-	newList.forEach((x) => oldSet.delete(x))
-	oldList.forEach((x) => newSet.delete(x))
-	const camelCase = /[a-z][A-Z]/
-	return {
-		removed: !removeCamelCase ? [...oldSet] : [...oldSet].filter((key) => !camelCase.test(key)),
-		added: !removeCamelCase ? [...newSet] : [...newSet].filter((key) => !camelCase.test(key)),
-	}
-}
+type BrowserName = keyof ReturnType<typeof getStableFeatures>
+type EngineMap = Record<string, readonly string[]>
 
-const BROWSER = (
-	IS_BLINK ? 'Chrome' : IS_GECKO ? 'Firefox' : ''
+const BROWSER: BrowserName | undefined = (
+	IS_BLINK ? 'Chrome' : IS_GECKO ? 'Firefox' : undefined
 )
 
-const getEngineMaps = (browser) => {
+const getEngineMaps = (browser: BrowserName | undefined): { css: EngineMap; win: EngineMap; js: EngineMap } => {
 	// Blink
 	const blinkJS = {
 		'76': ['Document.onsecuritypolicyviolation', 'Promise.allSettled'],
@@ -203,16 +192,16 @@ const getEngineMaps = (browser) => {
 		'112': ['FileSystemFileHandle', '!U2F'],
 	}
 
-	const IS_BLINK = browser == 'Chrome'
-	const IS_GECKO = browser == 'Firefox'
+	const isBlink = browser == 'Chrome'
+	const isGecko = browser == 'Firefox'
 	const css = (
-		IS_BLINK ? blinkCSS : IS_GECKO ? geckoCSS : {}
+		isBlink ? blinkCSS : isGecko ? geckoCSS : {}
 	)
 	const win = (
-		IS_BLINK ? blinkWindow : IS_GECKO ? geckoWindow : {}
+		isBlink ? blinkWindow : isGecko ? geckoWindow : {}
 	)
 	const js = (
-		IS_BLINK ? blinkJS : IS_GECKO ? geckoJS : {}
+		isBlink ? blinkJS : isGecko ? geckoJS : {}
 	)
 	return {
 		css,
@@ -221,7 +210,7 @@ const getEngineMaps = (browser) => {
 	}
 }
 
-const getJSCoreFeatures = (win) => {
+const getJSCoreFeatures = (win: object): string[] => {
 	const globalObjects = [
 		'Object',
 		'Function',
@@ -249,54 +238,81 @@ const getJSCoreFeatures = (win) => {
 		'Document',
 		'Element',
 	]
-	try {
-		// @ts-ignore
-		const features = globalObjects.reduce((acc, name) => {
-			const ignore = ['name', 'length', 'constructor', 'prototype', 'arguments', 'caller']
-			const descriptorKeys = Object.keys(Object.getOwnPropertyDescriptors(win[name]||{}))
-			const descriptorProtoKeys = Object.keys(Object.getOwnPropertyDescriptors((win[name]||{}).prototype||{}))
-			const uniques = [...new Set([...descriptorKeys, ...descriptorProtoKeys].filter((key) => !ignore.includes(key)))]
-			const keys = uniques.map((key) => `${name}.${key}`)
-			return [...acc, ...keys]
-		}, [])
-		return features
-	} catch (error) {
-		captureError(error, 'window feature collection failed')
-		return []
-	}
+	return globalObjects.reduce<string[]>((acc, name) => {
+		const ignore = ['name', 'length', 'constructor', 'prototype', 'arguments', 'caller']
+		const globalValue: unknown = Reflect.get(win, name)
+		const descriptorTarget = globalValue != null && (typeof globalValue == 'object' || typeof globalValue == 'function') ? globalValue : {}
+		const prototype: unknown = Reflect.get(descriptorTarget, 'prototype')
+		const prototypeTarget = prototype != null && (typeof prototype == 'object' || typeof prototype == 'function') ? prototype : {}
+		const descriptorKeys = Object.keys(Object.getOwnPropertyDescriptors(descriptorTarget))
+		const descriptorProtoKeys = Object.keys(Object.getOwnPropertyDescriptors(prototypeTarget))
+		const uniques = [...new Set([...descriptorKeys, ...descriptorProtoKeys].filter((key) => !ignore.includes(key)))]
+		const keys = uniques.map((key) => `${name}.${key}`)
+		return [...acc, ...keys]
+	}, [])
 }
 
-// @ts-ignore
-const versionSort = (x) => x.sort((a, b) => /\d+/.exec(a)[0] - /\d+/.exec(b)[0]).reverse()
+const getVersionNumber = (version: string): number => Number(/\d+/.exec(version)?.[0] ?? Number.NEGATIVE_INFINITY)
 
-const getVersionLie = (vReport, version, forgivenessOffset = 0) => {
+const versionSort = (versions: readonly string[]): string[] => [...versions].sort((a, b) => {
+	const distance = getVersionNumber(b) - getVersionNumber(a)
+	return distance || (a < b ? -1 : a > b ? 1 : 0)
+})
+
+interface VersionLie {
+	liedVersion: boolean
+	distance: number
+}
+
+const getVersionLie = (vReport: string | undefined, version: string | undefined, forgivenessOffset = 0): VersionLie => {
 	const stable = getStableFeatures()
-	const { version: maxVersion } = stable[BROWSER] || {}
-	const validMetrics = vReport && version
-	if (!validMetrics) {
-		return {}
+	const maxVersion = BROWSER === undefined ? undefined : stable[BROWSER].version
+	const reportedVersion = Number(vReport)
+	if (!version || !Number.isFinite(reportedVersion)) {
+		return { liedVersion: false, distance: 0 }
 	}
 
-	const [vStart, vEnd] = version ? version.split('-') : []
-	const vMax = (vEnd || vStart)
-	const reportIsTooHigh = +vReport > (+vMax + forgivenessOffset)
-	const reportIsTooLow = +vReport < (+vStart - forgivenessOffset)
+	const isLowerBound = version.endsWith('+')
+	const [vStart = '', vEnd] = version.replace(/\+$/, '').split('-')
+	const vMax = vEnd || vStart
+	const start = Number(vStart)
+	const end = Number(vMax)
+	if (!Number.isFinite(start) || !Number.isFinite(end)) {
+		return { liedVersion: false, distance: 0 }
+	}
+	const reportIsTooHigh = !isLowerBound && reportedVersion > (end + forgivenessOffset)
+	const reportIsTooLow = reportedVersion < (start - forgivenessOffset)
 	const reportIsOff = (reportIsTooHigh || reportIsTooLow)
 	const versionIsAboveMax = (
-		(+vMax == maxVersion) &&
-		(+vReport > maxVersion)
+		maxVersion !== undefined &&
+		(end == maxVersion) &&
+		(reportedVersion > maxVersion)
 	)
 	const liedVersion = !versionIsAboveMax && reportIsOff
 
 	const distance = !liedVersion ? 0 : (
-		Math.abs(vReport-(reportIsTooLow ? vStart : vMax))
+		Math.abs(reportedVersion - (reportIsTooLow ? start : end))
 	)
 
 	return { liedVersion, distance }
 }
 
+const markTerminalEstimate = (version: string | undefined, reportedVersion: string | undefined): string | undefined => {
+	if (!version || BROWSER === undefined) return version
+	const maxVersion = getStableFeatures()[BROWSER].version
+	const report = Number(reportedVersion)
+	const versionEnd = Number((version.split('-').at(-1) ?? '').replace(/\+$/, ''))
+	return Number.isFinite(report) && report > maxVersion && versionEnd === maxVersion ? `${maxVersion}+` : version
+}
+
+interface FeaturesFingerprint {
+	workerScope?: { userAgent?: string; userAgentVersion?: string }
+	resistance?: { privacy?: string }
+	features?: { cssVersion?: string; jsVersion?: string }
+}
+
 // feature firewall
-export function getFeaturesLie(fp) {
+export function getFeaturesLie(fp: FeaturesFingerprint): boolean {
 	if (!fp.workerScope || !fp.workerScope.userAgent) {
 		return false
 	}
@@ -316,11 +332,24 @@ export function getFeaturesLie(fp) {
 	return liedVersion
 }
 
+interface EngineFeatureInput {
+	cssComputed?: { computedStyle?: { keys?: readonly string[] } }
+	navigatorComputed?: { userAgentParsed?: string }
+	windowFeaturesComputed?: { keys?: readonly string[] }
+}
+
+interface FeatureSearchInput {
+	context: object
+	allKeys: readonly string[]
+	engineMap: EngineMap
+	checkNative?: boolean
+}
+
 export default async function getEngineFeatures({
 	cssComputed,
 	navigatorComputed,
 	windowFeaturesComputed,
-}) {
+}: EngineFeatureInput) {
 	try {
 		const timer = createTimer()
 		await queueEvent(timer)
@@ -331,23 +360,29 @@ export default async function getEngineFeatures({
 		}
 
 		const jsFeaturesKeys = getJSCoreFeatures(win)
-		const { keys: computedStyleKeys } = cssComputed.computedStyle || {}
-		const { keys: windowFeaturesKeys } = windowFeaturesComputed || {}
-		const { userAgentParsed: decryptedName } = navigatorComputed || {}
+		const { keys: computedStyleKeys = [] } = cssComputed.computedStyle || {}
+		const { keys: windowFeaturesKeys = [] } = windowFeaturesComputed || {}
+		const { userAgentParsed: decryptedName = '' } = navigatorComputed || {}
 
-		const isNative = (win, x) => (
-			/\[native code\]/.test(win[x]+'') &&
-			'prototype' in win[x] &&
-			win[x].prototype.constructor.name === x
-		)
+		const isNative = (context: object, name: string): boolean => {
+			try {
+				const value: unknown = Reflect.get(context, name)
+				if (typeof value != 'function') return false
+				const prototype: unknown = Reflect.get(value, 'prototype')
+				return /\[native code\]/.test(Function.prototype.toString.call(value)) &&
+					prototype != null && typeof prototype == 'object' &&
+					Reflect.get(Reflect.get(prototype, 'constructor'), 'name') === name
+			} catch {
+				return false
+			}
+		}
 
-		// @ts-ignore
-		const getFeatures = ({context, allKeys, engineMap, checkNative = false} = {}) => {
+		const getFeatures = ({context, allKeys, engineMap, checkNative = false}: FeatureSearchInput) => {
 			const allKeysSet = new Set(allKeys)
-			const features = new Set()
-			// @ts-ignore
-			const match = Object.keys(engineMap || {}).reduce((acc, key) => {
+			const features = new Set<string>()
+			const match = Object.keys(engineMap).reduce<string[]>((acc, key) => {
 				const version = engineMap[key]
+				if (!version) return acc
 				const versionLen = version.length
 				const featureLen = version.filter((prop) => {
 					const removedFromVersion = prop.charAt(0) == '!'
@@ -355,11 +390,12 @@ export default async function getEngineFeatures({
 						const propName = prop.slice(1)
 						return !allKeysSet.has(propName) && features.add(prop)
 					}
-					return (
+					const matches = (
 						allKeysSet.has(prop) &&
-						(checkNative ? isNative(context, prop) : true) &&
-						features.add(prop)
+						(checkNative ? isNative(context, prop) : true)
 					)
+					if (matches) features.add(prop)
+					return matches
 				}).length
 				return versionLen == featureLen ? [...acc, key] : acc
 			}, [])
@@ -379,7 +415,7 @@ export default async function getEngineFeatures({
 
 		// css version
 		const {
-			version: cssVersion,
+			version: cssVersionRaw,
 			features: cssFeatures,
 		} = getFeatures({
 			context: win,
@@ -389,7 +425,7 @@ export default async function getEngineFeatures({
 
 		// window version
 		const {
-			version: windowVersion,
+			version: windowVersionRaw,
 			features: windowFeatures,
 		} = getFeatures({
 			context: win,
@@ -400,7 +436,7 @@ export default async function getEngineFeatures({
 
 		// js version
 		const {
-			version: jsVersion,
+			version: jsVersionRaw,
 			features: jsFeatures,
 		} = getFeatures({
 			context: win,
@@ -409,7 +445,7 @@ export default async function getEngineFeatures({
 		})
 
 		// determine version based on 3 factors
-		const getVersionFromRange = (range, versionCollection) => {
+		const getVersionFromRange = (range: readonly string[], versionCollection: readonly (string | undefined)[]): string => {
 			const exactVersion = versionCollection.find((version) => version && !/-/.test(version))
 			if (exactVersion) {
 				return exactVersion
@@ -419,22 +455,24 @@ export default async function getEngineFeatures({
 			const last = range[len-1]
 			return (
 				!len ? '' :
-					len == 1 ? first :
-						`${last}-${first}`
+					len == 1 ? first ?? '' :
+						`${last ?? ''}-${first ?? ''}`
 			)
 		}
-		const versionSet = new Set([
+		const vReport = /\d+/.exec(decryptedName)?.[0]
+		const cssVersion = markTerminalEstimate(cssVersionRaw, vReport)
+		const windowVersion = markTerminalEstimate(windowVersionRaw, vReport)
+		const jsVersion = markTerminalEstimate(jsVersionRaw, vReport)
+		const versionSet = new Set<string>([
 			cssVersion,
 			windowVersion,
 			jsVersion,
-		])
-		versionSet.delete(undefined)
+		].filter((value): value is string => value !== undefined))
 		const versionRange = versionSort(
-			[...versionSet].reduce((acc, x) => [...acc, ...x.split('-')], []),
+			[...versionSet].reduce<string[]>((acc, x) => [...acc, ...x.split('-')], []),
 		)
 		const version = getVersionFromRange(versionRange, [cssVersion, windowVersion, jsVersion])
 
-		const vReport = (/\d+/.exec(decryptedName) || [])[0]
 		const {
 			liedVersion: liedCSS,
 			distance: distanceCSS,
@@ -493,6 +531,8 @@ export default async function getEngineFeatures({
 	} catch (error) {
 		logTestResult({ test: 'features', passed: false })
 		captureError(error)
-		return
+		throw error
 	}
 }
+
+export { getVersionLie, markTerminalEstimate, versionSort }

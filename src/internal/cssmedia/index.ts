@@ -1,40 +1,71 @@
-// @ts-nocheck
 import { captureError } from '../errors'
 import { PHANTOM_DARKNESS } from '../lies'
+import { instanceId } from '../utils/crypto'
 
 import { createTimer, logTestResult, LowerEntropy } from '../utils/helpers'
-export default function getCSSMedia() {
-	const gcd = (a, b) => b == 0 ? a : gcd(b, a % b)
+let probeSequence = 0
 
-	const getAspectRatio = (width, height) => {
+export default function getCSSMedia() {
+	let probe: HTMLElement | undefined
+	const gcd = (a: number, b: number): number => {
+		while (b) {
+			const remainder = a % b
+			a = b
+			b = remainder
+		}
+		return a
+	}
+
+	const getAspectRatio = (width: number, height: number): string | undefined => {
+		if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return
 		const r = gcd(width, height)
+		if (!r) return
 		const aspectRatio = `${width / r}/${height / r}`
 		return aspectRatio
 	}
 
-	const query = ({ body, type, rangeStart, rangeLen }) => {
-		const html = [...Array(rangeLen)].map((slot, i) => {
+	interface MediaQueryOptions {
+		doc: Document
+		win: Window
+		probe: HTMLElement
+		probeId: string
+		type: 'width' | 'height'
+		rangeStart: number
+		rangeLen: number
+	}
+	const query = ({ doc, win, probe, probeId, type, rangeStart, rangeLen }: MediaQueryOptions): string => {
+		const html = [...Array(rangeLen)].map((_, i) => {
 			i += rangeStart
-			return `@media(device-${type}:${i}px){body{--device-${type}:${i};}}`
+			return `@media(device-${type}:${i}px){#${probeId}{--device-${type}:${i};}}`
 		}).join('')
-		body.innerHTML = `<style>${html}</style>`
-		const style = getComputedStyle(body)
-		return style.getPropertyValue(`--device-${type}`).trim()
+		const stylesheet = doc.createElement('style')
+		stylesheet.textContent = html
+		probe.append(stylesheet)
+		try {
+			const style = win.getComputedStyle(probe)
+			return style.getPropertyValue(`--device-${type}`).trim()
+		} finally {
+			stylesheet.remove()
+		}
 	}
 
-	const getScreenMedia = ({ body, width, height }) => {
-		let widthMatch = query({ body, type: 'width', rangeStart: width, rangeLen: 1 })
-		let heightMatch = query({ body, type: 'height', rangeStart: height, rangeLen: 1 })
+	type ScreenMediaOptions = Omit<MediaQueryOptions, 'type' | 'rangeStart' | 'rangeLen'> & {
+		width: number
+		height: number
+	}
+	const getScreenMedia = ({ doc, win, probe, probeId, width, height }: ScreenMediaOptions) => {
+		let widthMatch = query({ doc, win, probe, probeId, type: 'width', rangeStart: width, rangeLen: 1 })
+		let heightMatch = query({ doc, win, probe, probeId, type: 'height', rangeStart: height, rangeLen: 1 })
 		if (widthMatch && heightMatch) {
 			return { width, height }
 		}
 		const rangeLen = 1000
-		;[...Array(10)].find((slot, i) => {
+		;[...Array(10)].find((_, i) => {
 			if (!widthMatch) {
-				widthMatch = query({ body, type: 'width', rangeStart: i * rangeLen, rangeLen })
+				widthMatch = query({ doc, win, probe, probeId, type: 'width', rangeStart: i * rangeLen, rangeLen })
 			}
 			if (!heightMatch) {
-				heightMatch = query({ body, type: 'height', rangeStart: i * rangeLen, rangeLen })
+				heightMatch = query({ doc, win, probe, probeId, type: 'height', rangeStart: i * rangeLen, rangeLen })
 			}
 			return widthMatch && heightMatch
 		})
@@ -44,10 +75,17 @@ export default function getCSSMedia() {
 	try {
 		const timer = createTimer()
 		timer.start()
-		const win = PHANTOM_DARKNESS.window
+		const win = PHANTOM_DARKNESS || window
 
-		const { body } = win.document
+		const { document: doc } = win
+		const { body } = doc
 		const { width, availWidth, height, availHeight } = win.screen
+		const probeId = `${instanceId}-css-media-${++probeSequence}`
+		probe = doc.createElement('div')
+		probe.id = probeId
+		probe.setAttribute('aria-hidden', 'true')
+		probe.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:0;height:0;pointer-events:none'
+		body.append(probe)
 
 		const noTaskbar = !(width - availWidth || height - availHeight)
 		if (screen.width !== width || (width > 800 && noTaskbar)) {
@@ -96,7 +134,7 @@ export default function getCSSMedia() {
 					win.matchMedia('(pointer: coarse)').matches ? 'coarse' :
 						win.matchMedia('(pointer: none)').matches ? 'none' : undefined
 			),
-			['device-aspect-ratio']: (
+			['device-aspect-ratio']: !deviceAspectRatio ? undefined : (
 				win.matchMedia(`(device-aspect-ratio: ${deviceAspectRatio})`).matches ? deviceAspectRatio : undefined
 			),
 			['device-screen']: (
@@ -120,43 +158,43 @@ export default function getCSSMedia() {
 			),
 		}
 
-		body.innerHTML = `
-		<style>
-		@media (prefers-reduced-motion: no-preference) {body {--prefers-reduced-motion: no-preference}}
-		@media (prefers-reduced-motion: reduce) {body {--prefers-reduced-motion: reduce}}
-		@media (prefers-color-scheme: light) {body {--prefers-color-scheme: light}}
-		@media (prefers-color-scheme: dark) {body {--prefers-color-scheme: dark}}
-		@media (monochrome) {body {--monochrome: monochrome}}
-		@media (monochrome: 0) {body {--monochrome: non-monochrome}}
-		@media (inverted-colors: inverted) {body {--inverted-colors: inverted}}
-		@media (inverted-colors: none) {body {--inverted-colors: none}}
-		@media (forced-colors: none) {body {--forced-colors: none}}
-		@media (forced-colors: active) {body {--forced-colors: active}}
-		@media (any-hover: hover) {body {--any-hover: hover}}
-		@media (any-hover: none) {body {--any-hover: none}}
-		@media (hover: hover) {body {--hover: hover}}
-		@media (hover: none) {body {--hover: none}}
-		@media (any-pointer: fine) {body {--any-pointer: fine}}
-		@media (any-pointer: coarse) {body {--any-pointer: coarse}}
-		@media (any-pointer: none) {body {--any-pointer: none}}
-		@media (pointer: fine) {body {--pointer: fine}}
-		@media (pointer: coarse) {body {--pointer: coarse}}
-		@media (pointer: none) {body {--pointer: none}}
-		@media (device-aspect-ratio: ${deviceAspectRatio}) {body {--device-aspect-ratio: ${deviceAspectRatio}}}
-		@media (device-width: ${width}px) and (device-height: ${height}px) {body {--device-screen: ${width} x ${height}}}
-		@media (display-mode: fullscreen) {body {--display-mode: fullscreen}}
-		@media (display-mode: standalone) {body {--display-mode: standalone}}
-		@media (display-mode: minimal-ui) {body {--display-mode: minimal-ui}}
-		@media (display-mode: browser) {body {--display-mode: browser}}
-		@media (color-gamut: srgb) {body {--color-gamut: srgb}}
-		@media (color-gamut: p3) {body {--color-gamut: p3}}
-		@media (color-gamut: rec2020) {body {--color-gamut: rec2020}}
-		@media (orientation: landscape) {body {--orientation: landscape}}
-		@media (orientation: portrait) {body {--orientation: portrait}}
-		</style>
+		const stylesheet = doc.createElement('style')
+		stylesheet.textContent = `
+		@media (prefers-reduced-motion: no-preference) {#${probeId} {--prefers-reduced-motion: no-preference}}
+		@media (prefers-reduced-motion: reduce) {#${probeId} {--prefers-reduced-motion: reduce}}
+		@media (prefers-color-scheme: light) {#${probeId} {--prefers-color-scheme: light}}
+		@media (prefers-color-scheme: dark) {#${probeId} {--prefers-color-scheme: dark}}
+		@media (monochrome) {#${probeId} {--monochrome: monochrome}}
+		@media (monochrome: 0) {#${probeId} {--monochrome: non-monochrome}}
+		@media (inverted-colors: inverted) {#${probeId} {--inverted-colors: inverted}}
+		@media (inverted-colors: none) {#${probeId} {--inverted-colors: none}}
+		@media (forced-colors: none) {#${probeId} {--forced-colors: none}}
+		@media (forced-colors: active) {#${probeId} {--forced-colors: active}}
+		@media (any-hover: hover) {#${probeId} {--any-hover: hover}}
+		@media (any-hover: none) {#${probeId} {--any-hover: none}}
+		@media (hover: hover) {#${probeId} {--hover: hover}}
+		@media (hover: none) {#${probeId} {--hover: none}}
+		@media (any-pointer: fine) {#${probeId} {--any-pointer: fine}}
+		@media (any-pointer: coarse) {#${probeId} {--any-pointer: coarse}}
+		@media (any-pointer: none) {#${probeId} {--any-pointer: none}}
+		@media (pointer: fine) {#${probeId} {--pointer: fine}}
+		@media (pointer: coarse) {#${probeId} {--pointer: coarse}}
+		@media (pointer: none) {#${probeId} {--pointer: none}}
+		${deviceAspectRatio ? `@media (device-aspect-ratio: ${deviceAspectRatio}) {#${probeId} {--device-aspect-ratio: ${deviceAspectRatio}}}` : ''}
+		@media (device-width: ${width}px) and (device-height: ${height}px) {#${probeId} {--device-screen: ${width} x ${height}}}
+		@media (display-mode: fullscreen) {#${probeId} {--display-mode: fullscreen}}
+		@media (display-mode: standalone) {#${probeId} {--display-mode: standalone}}
+		@media (display-mode: minimal-ui) {#${probeId} {--display-mode: minimal-ui}}
+		@media (display-mode: browser) {#${probeId} {--display-mode: browser}}
+		@media (color-gamut: srgb) {#${probeId} {--color-gamut: srgb}}
+		@media (color-gamut: p3) {#${probeId} {--color-gamut: p3}}
+		@media (color-gamut: rec2020) {#${probeId} {--color-gamut: rec2020}}
+		@media (orientation: landscape) {#${probeId} {--orientation: landscape}}
+		@media (orientation: portrait) {#${probeId} {--orientation: portrait}}
 		`
+		probe.append(stylesheet)
 
-		const style = getComputedStyle(body)
+		const style = win.getComputedStyle(probe)
 		const mediaCSS = {
 			['prefers-reduced-motion']: style.getPropertyValue('--prefers-reduced-motion').trim() || undefined,
 			['prefers-color-scheme']: style.getPropertyValue('--prefers-color-scheme').trim() || undefined,
@@ -175,13 +213,15 @@ export default function getCSSMedia() {
 		}
 
 		// get screen query
-		const screenQuery = getScreenMedia({ body, width, height })
+		const screenQuery = getScreenMedia({ doc, win, probe, probeId, width, height })
 
 		logTestResult({ time: timer.stop(), test: 'css media', passed: true })
 		return { mediaCSS, matchMediaCSS, screenQuery }
 	} catch (error) {
 		logTestResult({ test: 'css media', passed: false })
 		captureError(error)
-		return
+		throw error
+	} finally {
+		probe?.remove()
 	}
 }

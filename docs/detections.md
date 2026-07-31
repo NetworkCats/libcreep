@@ -52,6 +52,11 @@ Every core component is attempted by `collector.collect()`.
 | `intl`                | Locale-sensitive `Intl` constructors and lie checks              |
 | `features`            | JavaScript, DOM, CSS, and Window engine/version features         |
 
+The `features.*Version` and `versionRange` fields are estimates from pinned
+feature maps, not exact browser-version reports. The current maps end at
+Chrome 115 and Firefox 112; newer engines report terminal lower bounds such as
+`115+` or `112+` rather than claiming those map endpoints as exact versions.
+
 Many component interfaces expose common, useful fields explicitly and retain
 additional upstream data where a detector is intentionally open-ended. Consult
 the generated TypeScript declarations for the field-level value shapes. Always
@@ -62,12 +67,12 @@ narrow the component status before reading its value.
 Auxiliary probes live in `result.auxiliary`. They do not contribute to
 `visitorId`, `rawVisitorId`, `stableComponents`, or the focused hashes.
 
-| Key                 | Default | Value and behavior                                                                                                                                                      |
-| ------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `mediaCapabilities` | Yes     | Supported fixed audio/video codec configurations, with available `smooth` and `efficient` flags. Returns `unsupported` when `MediaCapabilities.decodingInfo` is absent. |
-| `mediaDevices`      | Yes     | Sorted media-device kinds from `enumerateDevices()`. It requests no camera/microphone permission and returns neither labels nor device IDs.                             |
-| `status`            | Yes     | Available battery, storage quota, network, timing resolution, stack size, script-source, and client-global information. Individual fields can be `null` or `undefined`. |
-| `webRtc`            | No      | SDP codecs/extensions, ICE candidate data, and a network address when available. Contacts external STUN servers and can take roughly three seconds.                     |
+| Key                 | Default | Value and behavior                                                                                                                                                                              |
+| ------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mediaCapabilities` | Yes     | Supported fixed audio/video codec configurations, with available `smooth` and `efficient` flags. Returns `unsupported` when `MediaCapabilities.decodingInfo` is absent.                         |
+| `mediaDevices`      | Yes     | Sorted media-device kinds from `enumerateDevices()`. It requests no camera/microphone permission and returns neither labels nor device IDs.                                                     |
+| `status`            | Yes     | Available battery, storage quota, network, timing resolution, stack size, passive script resource-size metadata, and client-global information. Individual fields can be `null` or `undefined`. |
+| `webRtc`            | No      | SDP codecs/extensions, ICE candidate data, and a network address when available. Contacts external STUN servers and can take roughly three seconds.                                             |
 
 Enable WebRTC explicitly:
 

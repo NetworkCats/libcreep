@@ -2,8 +2,9 @@
 
 ## Prerequisites
 
-The package accepts Node.js 22.12 or newer. Repository development and CI use
-the Node.js version in `.nvmrc` (currently Node 26). Install the Playwright
+The published ESM package accepts Node.js 18 or newer for SSR and build-tool
+imports. Repository development requires Node.js 22.12 or newer because of its
+Vite toolchain, and CI uses the version in `.nvmrc` (currently Node 26). Install the Playwright
 browser builds before running browser tests locally:
 
 ```sh
@@ -24,20 +25,21 @@ Use `npm install` only when intentionally updating `package-lock.json`; use
 
 ## Main commands
 
-| Command                       | Purpose                                                                                                                                      |
-| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `npm run format:check`        | Check Prettier formatting for source, configuration, and Markdown.                                                                           |
-| `npm run lint`                | Run Oxlint with warnings denied over the configured source and test files.                                                                   |
-| `npm run typecheck`           | Strictly type-check source and tests without emitting files.                                                                                 |
-| `npm run build`               | Clean and build ESM/runtime/worker output and declarations, remove debug-only declarations, and scan production output for profiler leakage. |
-| `npm run test:unit`           | Run Node-based unit tests.                                                                                                                   |
-| `npm run test:browser`        | Build production output, then run browser tests in Chromium, Firefox, and WebKit.                                                            |
-| `npm run test:node-compat`    | Verify the built package imports safely and fails clearly when collection is attempted in Node.                                              |
-| `npm run test:types:consumer` | Compile an external TypeScript-consumer fixture against the packaged public types.                                                           |
-| `npm test`                    | Run unit, browser, Node compatibility, and consumer-type tests.                                                                              |
-| `npm run validate`            | Run the complete formatting, lint, type, test, build, package-lint, and type-resolution validation sequence.                                 |
-| `npm run test:coverage`       | Build and run both unit and browser projects with Istanbul coverage.                                                                         |
-| `npm run test:speed`          | Run the cross-browser collection benchmark and enforce timing budgets.                                                                       |
+| Command                       | Purpose                                                                                                                                                                 |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm run format:check`        | Check Prettier formatting for source, configuration, and Markdown.                                                                                                      |
+| `npm run lint`                | Run Oxlint with warnings denied over the configured source and test files.                                                                                              |
+| `npm run typecheck`           | Strictly type-check source and tests without emitting files.                                                                                                            |
+| `npm run build`               | Clean and build ESM/runtime/worker output and public declarations, remove internal and unusable declaration artifacts, and scan production output for profiler leakage. |
+| `npm run test:unit`           | Run Node-based unit tests.                                                                                                                                              |
+| `npm run test:browser`        | Build production output, then run browser tests in Chromium, Firefox, and WebKit.                                                                                       |
+| `npm run test:node-compat`    | Verify the built package imports safely and fails clearly when collection is attempted in Node.                                                                         |
+| `npm run test:vite-consumer`  | Build an external Vite app and verify its bundle copies and references the packaged default worker.                                                                     |
+| `npm run test:types:consumer` | Compile an external TypeScript-consumer fixture against the packaged public types.                                                                                      |
+| `npm test`                    | Run unit, browser, Node compatibility, downstream Vite, and consumer-type tests.                                                                                        |
+| `npm run validate`            | Run the complete formatting, lint, type, test, build, package-lint, and type-resolution validation sequence.                                                            |
+| `npm run test:coverage`       | Build and run both unit and browser projects with Istanbul coverage.                                                                                                    |
+| `npm run test:speed`          | Run the cross-browser collection benchmark and enforce timing budgets.                                                                                                  |
 
 `npm run validate` is the closest local equivalent of release validation. In
 addition to the test suites it runs `publint` and `@arethetypeswrong/cli` with
@@ -133,6 +135,8 @@ JavaScript and source maps so a build fails if profiler markers remain.
   and guards against accidental `any` or obsolete API fields.
 - `scripts/check-node-compatibility.mjs` verifies built-package SSR/Node import
   safety without pretending collection can run server-side.
+- `scripts/check-vite-consumer.mjs` verifies that a downstream Vite build emits
+  the self-contained default worker and rewrites the package-relative URL.
 
 The upstream exploratory browser-test areas are mapped to automated assertions
 inside `fingerprint.browser.test.ts`: workers, iframes, fonts, timezone,

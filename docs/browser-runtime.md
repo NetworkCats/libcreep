@@ -43,8 +43,9 @@ collection.
 
 The worker-scope component uses a separate module-worker entry. By default its
 URL is resolved as `./worker.js` relative to the loaded `libcreep` package
-entry. No override is needed when a bundler or static host keeps the built
-distribution files and their relative paths together.
+entry. The published entry uses the static `new URL(..., import.meta.url)`
+pattern, so Vite-style asset pipelines copy and rewrite the self-contained
+worker during an application build.
 
 Configure `worker.url` when deployment moves or renames that asset:
 
@@ -58,11 +59,10 @@ const collector = await load({
 });
 ```
 
-The worker entry imports another packaged chunk. Deploy the complete built
-output, preserving relative paths, rather than copying `worker.js` alone. The
-server must return JavaScript with an appropriate MIME type. Worker CSP and
-cross-origin rules still apply; same-origin hosting is the most portable, and
-service workers strictly require it.
+The worker entry is self-contained. When hosting it manually, the server must
+return JavaScript with an appropriate MIME type. Worker CSP and cross-origin
+rules still apply; same-origin hosting is the most portable, and service
+workers strictly require it.
 
 If the worker asset is missing or every selected worker transport is blocked,
 `components.workerScope` is `unsupported`. Navigator and the other components
@@ -85,11 +85,9 @@ falls through to the next transport; these limits are implementation-level
 fallback guards, not a promise for total collection duration. Use
 `timeoutMs` for an application deadline.
 
-The default's shared-first order also aligns with the upstream bot heuristic,
-which treats shared and service-worker scopes as more trustworthy than an
-easily spoofed dedicated scope. In `'dedicated-only'` mode, collection can
-succeed while the bot mask still flags the dedicated worker rule. Consumers
-should interpret bot signals as heuristics, not verdicts.
+All three successful transports produce a usable worker scope. The bot rule
+`workerScopeIsBlocked` is set only when no transport returns one. Consumers
+should still interpret bot signals as heuristics, not verdicts.
 
 ## Temporary service worker
 
@@ -127,7 +125,7 @@ Three auxiliary probes run by default:
   microphone permission, then returns sorted device kinds only. It does not
   return labels or device IDs.
 - `status` collects available battery, storage quota, network, timing, stack,
-  script-source, and client-global information.
+  passive script resource-size metadata, and client-global information.
 
 Their results live under `result.auxiliary` and are not included in
 `visitorId` or `rawVisitorId`. A browser can expose only part of the status
@@ -163,15 +161,25 @@ consent requirements.
 
 ## Cancellation and cleanup
 
+`load({ signal, timeoutMs })` can cancel document readiness and dynamic runtime
+loading. Those options expire when `load()` returns; pass separate controls to
+each later `collector.collect()` call.
+
 `signal` cancels both queued and active calls. A queued call rejects promptly
 and is removed before its detector run starts. During an active call, the
 signal is propagated to long-lived worker, WebRTC, audio, and status work, and
 temporary DOM is removed in a final cleanup path.
 
-`timeoutMs` creates an internal abort signal after active collection begins.
-It does not count time spent waiting in the module-wide collection queue. A
-timeout rejects the call with `TimeoutError`; it is not represented as a
-component-level error.
+The caller rejects promptly, while the internal serialization slot remains
+occupied until already-started, stateful core detectors settle. This prevents
+late detector mutations from overlapping the next collection. Passive
+auxiliary operations are not part of that state barrier, so an unresponsive
+browser promise cannot permanently block later collections.
+
+`timeoutMs` creates a deadline when the public collection call begins. It
+includes one-shot loading, document readiness, time spent waiting in the
+module-wide collection queue, and active detector work. A timeout rejects the
+call with `TimeoutError`; it is not represented as a component-level error.
 
 ## Browser support expectations
 

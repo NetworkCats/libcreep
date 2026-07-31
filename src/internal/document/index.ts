@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { captureError } from '../errors'
 import { createTimer, logTestResult } from '../utils/helpers'
 export default function getHTMLElementVersion() {
@@ -15,6 +14,6 @@ export default function getHTMLElementVersion() {
 	} catch (error) {
 		logTestResult({ test: 'html element', passed: false })
 		captureError(error)
-		return
+		throw error
 	}
 }

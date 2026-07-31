@@ -1,38 +1,34 @@
-// @ts-nocheck
-import { PlatformClassifier } from './types'
+import { PlatformClassifier, type PlatformClassifier as Platform } from './types'
 
-export function isFontOSBad(userAgentOS: string, fonts: string[]): boolean {
+export function isFontOSBad(userAgentOS: Platform | undefined, fonts: readonly string[] | undefined): boolean {
 	if (!userAgentOS || !fonts || !fonts.length) return false
 
-	const fontMap = fonts.reduce((acc, x) => {
-		acc[x] = true
-		return acc
-	}, {} as Record<string, boolean>)
+	const fontSet = new Set(fonts)
 
 	const isLikeWindows = (
-		'Cambria Math' in fontMap ||
-		'Nirmala UI' in fontMap ||
-		'Leelawadee UI' in fontMap ||
-		'HoloLens MDL2 Assets' in fontMap ||
-		'Segoe Fluent Icons' in fontMap
+		fontSet.has('Cambria Math') ||
+		fontSet.has('Nirmala UI') ||
+		fontSet.has('Leelawadee UI') ||
+		fontSet.has('HoloLens MDL2 Assets') ||
+		fontSet.has('Segoe Fluent Icons')
 	)
 
 	const isLikeApple = (
-		'Helvetica Neue' in fontMap ||
-		'Luminari' in fontMap ||
-		'PingFang HK Light' in fontMap ||
-		'InaiMathi Bold' in fontMap ||
-		'Galvji' in fontMap ||
-		'Chakra Petch' in fontMap
+		fontSet.has('Helvetica Neue') ||
+		fontSet.has('Luminari') ||
+		fontSet.has('PingFang HK Light') ||
+		fontSet.has('InaiMathi Bold') ||
+		fontSet.has('Galvji') ||
+		fontSet.has('Chakra Petch')
 	)
 
 	const isLikeLinux = (
-		'Arimo' in fontMap ||
-		'MONO' in fontMap ||
-		'Ubuntu' in fontMap ||
-		'Noto Color Emoji' in fontMap ||
-		'Dancing Script' in fontMap ||
-		'Droid Sans Mono' in fontMap
+		fontSet.has('Arimo') ||
+		fontSet.has('MONO') ||
+		fontSet.has('Ubuntu') ||
+		fontSet.has('Noto Color Emoji') ||
+		fontSet.has('Dancing Script') ||
+		fontSet.has('Droid Sans Mono')
 	)
 
 	if (isLikeWindows && userAgentOS != PlatformClassifier.WINDOWS) {

@@ -5,15 +5,21 @@ import {
   collect,
   load,
   LIBRARY_VERSION,
+  type CollectionOptions,
   type FingerprintResult,
 } from '../src/index.js';
+import { printSpeedProfile } from '../src/internal/debug/profile.js';
 import { collectFingerprint } from '../src/runtime.js';
 
+vi.mock('../src/internal/debug/profile.js', () => ({
+  printSpeedProfile: vi.fn(),
+}));
 vi.mock('../src/runtime.js', () => ({
   collectFingerprint: vi.fn(),
 }));
 
 const mockedCollectFingerprint = vi.mocked(collectFingerprint);
+const mockedPrintSpeedProfile = vi.mocked(printSpeedProfile);
 const fingerprint = {
   components: {},
   rawVisitorId: 'fixture',
@@ -26,9 +32,11 @@ beforeEach(() => {
   });
   vi.stubGlobal('window', { isSecureContext: true });
   mockedCollectFingerprint.mockReset();
+  mockedPrintSpeedProfile.mockReset();
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -50,13 +58,17 @@ describe('fingerprint collector orchestration', () => {
     });
 
     const first = collector.collect({ includeWebRtc: true });
-    const second = collector.collect({ timeoutMs: 250 });
+    const secondOptions = { timeoutMs: 250 };
+    const second = collector.collect(secondOptions);
+    secondOptions.timeoutMs = 999;
 
     await vi.waitFor(() =>
       expect(mockedCollectFingerprint).toHaveBeenCalledOnce(),
     );
     expect(mockedCollectFingerprint).toHaveBeenNthCalledWith(1, {
       includeWebRtc: true,
+      signal: undefined,
+      timeoutMs: undefined,
       workerStrategy: 'dedicated-only',
       workerUrl: workerUrl.href,
     });
@@ -65,7 +77,8 @@ describe('fingerprint collector orchestration', () => {
     await expect(first).resolves.toBe(fingerprint);
     await expect(second).resolves.toBe(fingerprint);
     expect(mockedCollectFingerprint).toHaveBeenNthCalledWith(2, {
-      timeoutMs: 250,
+      signal: expect.any(AbortSignal),
+      timeoutMs: undefined,
       workerStrategy: 'dedicated-only',
       workerUrl: workerUrl.href,
     });
@@ -166,6 +179,20 @@ describe('fingerprint collector orchestration', () => {
     expect(debug).not.toHaveBeenCalled();
   });
 
+  it('contains failures from detached debug diagnostics', async () => {
+    mockedCollectFingerprint.mockResolvedValueOnce(fingerprint);
+    vi.spyOn(console, 'debug').mockImplementation(() => {
+      throw new Error('blocked console');
+    });
+    mockedPrintSpeedProfile.mockImplementationOnce(() => {
+      throw new Error('blocked profiler');
+    });
+    const collector = await load({ debug: true });
+
+    await expect(collector.collect()).resolves.toBe(fingerprint);
+    await vi.waitFor(() => expect(mockedPrintSpeedProfile).toHaveBeenCalled());
+  });
+
   it('splits load options from one-shot collection options', async () => {
     mockedCollectFingerprint.mockResolvedValueOnce(fingerprint);
     const signal = new AbortController().signal;
@@ -184,11 +211,12 @@ describe('fingerprint collector orchestration', () => {
     ).resolves.toBe(fingerprint);
     expect(mockedCollectFingerprint).toHaveBeenCalledWith({
       includeWebRtc: true,
-      signal,
-      timeoutMs: 500,
+      signal: expect.any(AbortSignal),
+      timeoutMs: undefined,
       workerStrategy: 'service-first',
       workerUrl: 'https://cdn.example.test/worker.js',
     });
+    expect(mockedCollectFingerprint.mock.calls[0]?.[0].signal).not.toBe(signal);
   });
 
   it('rejects unknown worker strategies instead of silently using auto', async () => {
@@ -199,6 +227,204 @@ describe('fingerprint collector orchestration', () => {
         },
       }),
     ).rejects.toThrow('Unknown worker strategy: typo');
+    expect(mockedCollectFingerprint).not.toHaveBeenCalled();
+  });
+
+  it('rejects invalid timeouts immediately instead of waiting in the queue', async () => {
+    let resolveFirst!: (result: FingerprintResult) => void;
+    mockedCollectFingerprint.mockImplementationOnce(
+      () =>
+        new Promise<FingerprintResult>((resolve) => {
+          resolveFirst = resolve;
+        }),
+    );
+    const collector = await load();
+    const first = collector.collect();
+    await vi.waitFor(() =>
+      expect(mockedCollectFingerprint).toHaveBeenCalledOnce(),
+    );
+
+    await expect(collector.collect({ timeoutMs: -1 })).rejects.toThrow(
+      'timeoutMs must be a finite number between 0 and 2147483647.',
+    );
+    await expect(
+      collector.collect({ timeoutMs: 2_147_483_648 }),
+    ).rejects.toThrow(
+      'timeoutMs must be a finite number between 0 and 2147483647.',
+    );
+    expect(mockedCollectFingerprint).toHaveBeenCalledOnce();
+
+    resolveFirst(fingerprint);
+    await expect(first).resolves.toBe(fingerprint);
+  });
+
+  it('returns a rejected promise when collection options cannot be read', async () => {
+    const collector = await load();
+    const reason = new TypeError('blocked option enumeration');
+    const options = new Proxy({} as CollectionOptions, {
+      ownKeys: () => {
+        throw reason;
+      },
+    });
+
+    const operation = collector.collect(options);
+
+    await expect(operation).rejects.toBe(reason);
+    expect(mockedCollectFingerprint).not.toHaveBeenCalled();
+  });
+
+  it('times out while queued without starting the expired collection', async () => {
+    vi.useFakeTimers();
+    let resolveFirst!: (result: FingerprintResult) => void;
+    mockedCollectFingerprint
+      .mockImplementationOnce(
+        () =>
+          new Promise<FingerprintResult>((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(fingerprint);
+    const collector = await load();
+    const first = collector.collect();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockedCollectFingerprint).toHaveBeenCalledOnce();
+
+    const expired = collector.collect({ timeoutMs: 25 });
+    const expiredExpectation = expect(expired).rejects.toMatchObject({
+      message: 'Fingerprint collection timed out after 25ms.',
+      name: 'TimeoutError',
+    });
+    await vi.advanceTimersByTimeAsync(25);
+    await expiredExpectation;
+    expect(mockedCollectFingerprint).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+
+    resolveFirst(fingerprint);
+    await expect(first).resolves.toBe(fingerprint);
+    await expect(collector.collect()).resolves.toBe(fingerprint);
+    expect(mockedCollectFingerprint).toHaveBeenCalledTimes(2);
+  });
+
+  it('times out one-shot collection while waiting for the document body', async () => {
+    vi.useFakeTimers();
+    let onReady: (() => void) | undefined;
+    const removeEventListener = vi.fn();
+    vi.stubGlobal('document', {
+      addEventListener: vi.fn((_type: string, listener: () => void) => {
+        onReady = listener;
+      }),
+      body: null,
+      removeEventListener,
+      readyState: 'loading',
+    });
+
+    const operation = collect({ timeoutMs: 40 });
+    const operationExpectation = expect(operation).rejects.toMatchObject({
+      message: 'Fingerprint collection timed out after 40ms.',
+      name: 'TimeoutError',
+    });
+    await vi.advanceTimersByTimeAsync(40);
+
+    await operationExpectation;
+    expect(removeEventListener).toHaveBeenCalledWith(
+      'DOMContentLoaded',
+      onReady,
+    );
+    expect(vi.getTimerCount()).toBe(0);
+    expect(mockedCollectFingerprint).not.toHaveBeenCalled();
+  });
+
+  it('cancels a direct load while waiting for the document body', async () => {
+    let onReady: (() => void) | undefined;
+    const removeEventListener = vi.fn();
+    vi.stubGlobal('document', {
+      addEventListener: vi.fn((_type: string, listener: () => void) => {
+        onReady = listener;
+      }),
+      body: null,
+      removeEventListener,
+      readyState: 'loading',
+    });
+    const controller = new AbortController();
+
+    const operation = load({ signal: controller.signal });
+    controller.abort(false);
+
+    await expect(operation).rejects.toBe(false);
+    expect(removeEventListener).toHaveBeenCalledWith(
+      'DOMContentLoaded',
+      onReady,
+    );
+    expect(mockedCollectFingerprint).not.toHaveBeenCalled();
+  });
+
+  it('times out a direct load while waiting for the document body', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('document', {
+      addEventListener: vi.fn(),
+      body: null,
+      removeEventListener: vi.fn(),
+      readyState: 'loading',
+    });
+
+    const operation = load({ timeoutMs: 30 });
+    const expectation = expect(operation).rejects.toMatchObject({
+      message: 'Fingerprint collection timed out after 30ms.',
+      name: 'TimeoutError',
+    });
+    await vi.advanceTimersByTimeAsync(30);
+
+    await expectation;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('lets a signal cancel one-shot collection while load waits for the DOM', async () => {
+    let onReady: (() => void) | undefined;
+    const removeEventListener = vi.fn();
+    vi.stubGlobal('document', {
+      addEventListener: vi.fn((_type: string, listener: () => void) => {
+        onReady = listener;
+      }),
+      body: null,
+      removeEventListener,
+      readyState: 'loading',
+    });
+    const controller = new AbortController();
+
+    const operation = collect({ signal: controller.signal });
+    controller.abort();
+
+    await expect(operation).rejects.toMatchObject({ name: 'AbortError' });
+    expect(removeEventListener).toHaveBeenCalledWith(
+      'DOMContentLoaded',
+      onReady,
+    );
+    expect(mockedCollectFingerprint).not.toHaveBeenCalled();
+  });
+
+  it('disconnects the body observer when one-shot loading is cancelled', async () => {
+    const disconnect = vi.fn();
+    vi.stubGlobal('document', {
+      body: null,
+      documentElement: {},
+      removeEventListener: vi.fn(),
+      readyState: 'interactive',
+    });
+    vi.stubGlobal(
+      'MutationObserver',
+      class {
+        disconnect = disconnect;
+        observe = vi.fn();
+      },
+    );
+    const controller = new AbortController();
+
+    const operation = collect({ signal: controller.signal });
+    controller.abort();
+
+    await expect(operation).rejects.toMatchObject({ name: 'AbortError' });
+    expect(disconnect).toHaveBeenCalledOnce();
     expect(mockedCollectFingerprint).not.toHaveBeenCalled();
   });
 
@@ -216,6 +442,7 @@ describe('fingerprint collector orchestration', () => {
         },
       ),
       body: null,
+      removeEventListener: vi.fn(),
       readyState: 'loading',
     });
 
@@ -240,6 +467,7 @@ describe('fingerprint collector orchestration', () => {
     const documentStub = {
       body: null as object | null,
       documentElement: {},
+      removeEventListener: vi.fn(),
       readyState: 'interactive',
     };
     const disconnect = vi.fn();

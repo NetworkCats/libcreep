@@ -21,7 +21,6 @@ describe('internal architecture', () => {
       .sort();
 
     expect(filesWithTags).toEqual([
-      'src/internal/cssmedia/index.ts',
       'src/internal/domrect/index.ts',
       'src/internal/fonts/index.ts',
       'src/internal/lies/index.ts',

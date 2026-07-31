@@ -23,8 +23,16 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
       - run: npm run test:unit
+      - run: npm run test:node-compat
+      - run: npm run test:vite-consumer
+      - run: npm run test:types:consumer
       - run: npm exec -c 'publint'
       - run: npm exec -c 'attw --pack --profile esm-only'
+      - name: Verify the minimum supported Node.js version
+        uses: actions/setup-node@v6
+        with:
+          node-version: 18
+      - run: node scripts/check-node-compatibility.mjs
 
   browser:
     name: Browser / ${{ matrix.browser }}

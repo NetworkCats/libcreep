@@ -1,10 +1,14 @@
-// @ts-nocheck
 import { captureError } from '../errors'
 import { documentLie, lieProps, PHANTOM_DARKNESS } from '../lies'
+import { instanceId } from '../utils/crypto'
 
 import { createTimer, queueEvent, CSS_FONT_FAMILY, EMOJIS, logTestResult } from '../utils/helpers'
 import { createMeasurementFragment, replaceElement } from '../utils/measurement'
+let probeSequence = 0
+
 export default async function getSVG() {
+	let container: HTMLElement | null = null
+	let placeholder: HTMLElement | null = null
 	try {
 		const timer = createTimer()
 		await queueEvent(timer)
@@ -27,22 +31,24 @@ export default async function getSVG() {
 				document
 		)
 
-		const divElement = document.createElement('div')
-		doc.body.appendChild(divElement)
+		const containerId = `${instanceId}-svg-container-${++probeSequence}`
+		const svgBoxId = `${containerId}-box`
+		placeholder = doc.createElement('div')
+		doc.body.appendChild(placeholder)
 
 		// patch div
-		replaceElement(divElement, createMeasurementFragment`
-			<div id="svg-container">
+		const fragment = createMeasurementFragment`
+			<div id="${containerId}">
 				<style>
-				#svg-container {
+				#${containerId} {
 					position: absolute;
 					left: -9999px;
 					height: auto;
 				}
-				#svg-container .shift-svg {
+				#${containerId} .shift-svg {
 					transform: scale(1.000999) !important;
 				}
-				.svgrect-emoji {
+				#${containerId} .svgrect-emoji {
 					font-family: ${CSS_FONT_FAMILY};
 					font-size: 200px !important;
 					height: auto;
@@ -51,7 +57,7 @@ export default async function getSVG() {
 				}
 				</style>
 				<svg>
-					<g id="svgBox">
+					<g id="${svgBoxId}">
 						${
 							EMOJIS.map((emoji) => {
 								return `<text x="32" y="32" class="svgrect-emoji">${emoji}</text>`
@@ -60,45 +66,53 @@ export default async function getSVG() {
 					</g>
 				</svg>
 			</div>
-		`)
+		`
+		container = fragment.firstElementChild as HTMLElement | null
+		if (!replaceElement(placeholder, fragment)) {
+			throw new Error('SVG measurement placeholder is detached')
+		}
+		if (!container) throw new Error('SVG measurement container blocked')
 
 		// SVG
-		const reduceToObject = (nativeObj) => {
-			const keys = Object.keys(nativeObj.__proto__)
-			return keys.reduce((acc, key) => {
-				const val = nativeObj[key]
-				const isMethod = typeof val == 'function'
-				return isMethod ? acc : {...acc, [key]: val}
-			}, {})
+		type RectValues = Pick<DOMRectReadOnly, 'height' | 'width' | 'x' | 'y'>
+		const reduceToObject = (nativeObj: DOMRectReadOnly): RectValues => {
+			return {
+				height: nativeObj.height,
+				width: nativeObj.width,
+				x: nativeObj.x,
+				y: nativeObj.y,
+			}
 		}
-		const reduceToSum = (nativeObj) => {
-			const keys = Object.keys(nativeObj.__proto__)
-			return keys.reduce((acc, key) => {
-				const val = nativeObj[key]
-				return isNaN(val) ? acc : (acc += val)
+		const reduceToSum = (nativeObj: DOMRectReadOnly): number => {
+			return (['height', 'width', 'x', 'y'] as const).reduce((acc, key) => {
+				const val = Number(nativeObj[key])
+				return Number.isNaN(val) ? acc : (acc += val)
 			}, 0)
 		}
 
-		const getObjectSum = (obj) => !obj ? 0 : Object.keys(obj).reduce((acc, key) => acc += Math.abs(obj[key]), 0)
+		const getObjectSum = (obj?: RectValues): number => !obj ? 0 :
+			(Object.keys(obj) as (keyof RectValues)[])
+				.reduce((acc, key) => acc + Math.abs(obj[key]), 0)
 
 		// SVGRect
-		const svgBox = doc.getElementById('svgBox')
+		const svgBox = container.querySelector(`#${svgBoxId}`) as SVGGElement
+		if (!svgBox) throw new Error('SVG measurement element blocked')
 		const bBox = reduceToObject(svgBox.getBBox())
 
 		// compute SVGRect emojis
-		const pattern = new Set()
-		const svgElems = [...svgBox.getElementsByClassName('svgrect-emoji')]
+		const pattern = new Set<string>()
+		const svgElems = [...svgBox.querySelectorAll<SVGTextContentElement>('.svgrect-emoji')]
 
 		await queueEvent(timer)
 		const emojiSet = svgElems.reduce((emojiSet, el, i) => {
 			const emoji = EMOJIS[i]
 			const dimensions = ''+el.getComputedTextLength()
-			if (!pattern.has(dimensions)) {
+			if (emoji && !pattern.has(dimensions)) {
 				pattern.add(dimensions)
 				emojiSet.add(emoji)
 			}
 			return emojiSet
-		}, new Set())
+		}, new Set<string>())
 
 		// svgRect System Sum
 		const svgrectSystemSum = 0.00001 * [...pattern].map((x) => {
@@ -106,7 +120,8 @@ export default async function getSVG() {
 		}).reduce((acc, x) => acc += x, 0)
 
 		// detect failed shift calculation
-		const svgEmojiEl = svgElems[0] as SVGTextContentElement
+		const svgEmojiEl = svgElems[0]
+		if (!svgEmojiEl) throw new Error('SVG emoji measurement element blocked')
 		const initial = svgEmojiEl.getComputedTextLength()
 		svgEmojiEl.classList.add('shift-svg')
 		const shifted = svgEmojiEl.getComputedTextLength()
@@ -119,23 +134,22 @@ export default async function getSVG() {
 
 		const data = {
 			bBox: getObjectSum(bBox),
-			extentOfChar: reduceToSum(svgElems[0].getExtentOfChar(EMOJIS[0])),
-			subStringLength: svgElems[0].getSubStringLength(0, 10),
-			computedTextLength: svgElems[0].getComputedTextLength(),
+			extentOfChar: reduceToSum(svgEmojiEl.getExtentOfChar(0)),
+			subStringLength: svgEmojiEl.getSubStringLength(0, 10),
+			computedTextLength: svgEmojiEl.getComputedTextLength(),
 			emojiSet: [...emojiSet],
 			svgrectSystemSum,
 			lied,
 		}
 
-		doc.body.removeChild(doc.getElementById('svg-container'))
-
 		logTestResult({ time: timer.stop(), test: 'svg', passed: true })
 		return data
 	} catch (error) {
-		const doc = PHANTOM_DARKNESS?.document?.body ? PHANTOM_DARKNESS.document : document
-		doc.getElementById('svg-container')?.remove()
 		logTestResult({ test: 'svg', passed: false })
 		captureError(error)
-		return
+		throw error
+	} finally {
+		container?.remove()
+		placeholder?.remove()
 	}
 }

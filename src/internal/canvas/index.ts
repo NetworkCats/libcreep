@@ -1,13 +1,12 @@
-// @ts-nocheck
 import { captureError } from '../errors'
 import { lieProps, PHANTOM_DARKNESS, documentLie } from '../lies'
 import { sendToTrash } from '../trash'
 
 import { createTimer, queueEvent, LIKE_BRAVE, CSS_FONT_FAMILY, EMOJIS, logTestResult, IS_WEBKIT, IS_BLINK, Analysis, LowerEntropy, IS_GECKO } from '../utils/helpers'
 // inspired by https://arkenfox.github.io/TZP/tests/canvasnoise.html
-const getPixelMods = () => {
-	const pattern1 = []
-	const pattern2 = []
+export const getPixelMods = () => {
+	const pattern1: string[] = []
+	const pattern2: string[] = []
 	const len = 8 // canvas dimensions
 	const alpha = 255
 	const visualMultiplier = 5
@@ -21,9 +20,13 @@ const getPixelMods = () => {
 		const canvasDisplay2 = document.createElement('canvas')
 		const canvas1 = document.createElement('canvas')
 		const canvas2 = document.createElement('canvas')
-		const contextDisplay2 = canvasDisplay2.getContext('2d', options)
-		const context1 = canvas1.getContext('2d', options)
-		const context2 = canvas2.getContext('2d', options)
+		const get2dContext = (canvas: HTMLCanvasElement): CanvasRenderingContext2D | null => (
+			(canvas.getContext('2d', options) as CanvasRenderingContext2D | null) ??
+			(canvas.getContext('2d') as CanvasRenderingContext2D | null)
+		)
+		const contextDisplay2 = get2dContext(canvasDisplay2)
+		const context1 = get2dContext(canvas1)
+		const context2 = get2dContext(canvas2)
 
 		if (!contextDisplay2 || !context1 || !context2) {
 			throw new Error('canvas context blocked')
@@ -38,7 +41,7 @@ const getPixelMods = () => {
 		canvas2.height = len
 
 		// fill canvas1 with random image data
-		;[...Array(len)].forEach((e, x) => [...Array(len)].forEach((e, y) => {
+		;[...Array(len)].forEach((_, x) => [...Array(len)].forEach((_, y) => {
 			const red = ~~(Math.random() * 256)
 			const green = ~~(Math.random() * 256)
 			const blue = ~~(Math.random() * 256)
@@ -49,7 +52,7 @@ const getPixelMods = () => {
 		}))
 
 		// fill canvas2 with canvas1 image data
-		;[...Array(len)].forEach((e, x) => [...Array(len)].forEach((e, y) => {
+		;[...Array(len)].forEach((_, x) => [...Array(len)].forEach((_, y) => {
 			// get context1 pixel data and mirror to context2
 			const {
 				data: [red, green, blue, alpha],
@@ -62,6 +65,7 @@ const getPixelMods = () => {
 			const {
 				data: [red2, green2, blue2, alpha2],
 			} = context2.getImageData(x, y, 1, 1) || {}
+			const colors2 = `${red2}, ${green2}, ${blue2}, ${alpha2}`
 			const colorsDisplay = `
 				${red != red2 ? red2 : 255},
 				${green != green2 ? green2 : 255},
@@ -75,16 +79,17 @@ const getPixelMods = () => {
 				1 * visualMultiplier,
 				1 * visualMultiplier,
 			)
-			return pattern2.push(colors) // collect the pixel pattern
+			return pattern2.push(colors2) // collect the mirrored pixel pattern
 		}))
 
 		// compare the pattern collections and collect diffs
-		const patternDiffs = []
-		const rgbaChannels = new Set()
+		const patternDiffs: [number, string][] = []
+		const rgbaChannels = new Set<string>()
 
-		;[...Array(pattern1.length)].forEach((e, i) => {
+		;[...Array(pattern1.length)].forEach((_, i) => {
 			const pixelColor1 = pattern1[i]
 			const pixelColor2 = pattern2[i]
+			if (pixelColor1 === undefined || pixelColor2 === undefined) return
 			if (pixelColor1 != pixelColor2) {
 				const rgbaValues1 = pixelColor1.split(',')
 				const rgbaValues2 = pixelColor2.split(',')
@@ -111,6 +116,24 @@ const getPixelMods = () => {
 }
 
 // based on and inspired by https://github.com/antoinevastel/picasso-like-canvas-fingerprinting
+interface CanvasArea {
+	width: number
+	height: number
+}
+
+interface PaintCanvasOptions {
+	canvas: HTMLCanvasElement
+	context: CanvasRenderingContext2D | null
+	strokeText?: boolean
+	cssFontFamily?: string
+	area?: CanvasArea
+	rounds?: number
+	maxShadowBlur?: number
+	seed?: number
+	offset?: number
+	multiplier?: number
+}
+
 const paintCanvas = ({
   canvas,
   context,
@@ -122,7 +145,7 @@ const paintCanvas = ({
   seed = 500,
   offset = 2001000001,
   multiplier = 15000,
-}) => {
+}: PaintCanvasOptions) => {
   if (!context) {
     return
   }
@@ -135,7 +158,11 @@ const paintCanvas = ({
     canvas.style.display = 'none'
   }
 
-  const createPicassoSeed = ({ seed, offset, multiplier }) => {
+  const createPicassoSeed = ({ seed, offset, multiplier }: {
+	seed: number
+	offset: number
+	multiplier: number
+}) => {
     let current = Number(seed) % Number(offset)
     const getNextSeed = () => {
       current = (Number(multiplier) * current) % Number(offset)
@@ -149,12 +176,19 @@ const paintCanvas = ({
   const picassoSeed = createPicassoSeed({ seed, offset, multiplier })
   const { getNextSeed } = picassoSeed
 
-  const patchSeed = (current, offset, maxBound, computeFloat) => {
+  const patchSeed = (current: number, offset: number, maxBound: number, computeFloat = false) => {
     const result = (((current - 1) / offset) * (maxBound || 1)) || 0
     return computeFloat ? result : Math.floor(result)
   }
 
-  const addRandomCanvasGradient = (context, offset, area, colors, getNextSeed) => {
+  type NextSeed = () => number
+	const addRandomCanvasGradient = (
+		context: CanvasRenderingContext2D,
+		offset: number,
+		area: CanvasArea,
+		colors: string[],
+		getNextSeed: NextSeed,
+	) => {
     const { width, height } = area
     const canvasGradient = context.createRadialGradient(
       patchSeed(getNextSeed(), offset, width),
@@ -164,8 +198,8 @@ const paintCanvas = ({
       patchSeed(getNextSeed(), offset, height),
       patchSeed(getNextSeed(), offset, width),
     )
-    canvasGradient.addColorStop(0, colors[patchSeed(getNextSeed(), offset, colors.length)])
-    canvasGradient.addColorStop(1, colors[patchSeed(getNextSeed(), offset, colors.length)])
+    canvasGradient.addColorStop(0, colors[patchSeed(getNextSeed(), offset, colors.length)] ?? '#000')
+    canvasGradient.addColorStop(1, colors[patchSeed(getNextSeed(), offset, colors.length)] ?? '#000')
     context.fillStyle = canvasGradient
   }
 
@@ -182,7 +216,13 @@ const paintCanvas = ({
     '#E64D66', '#4DB380', '#FF4D4D', '#99E6E6', '#6666FF',
   ]
 
-	const drawOutlineOfText = (context, offset, area, getNextSeed) => {
+	type DrawingMethod = (
+		context: CanvasRenderingContext2D,
+		offset: number,
+		area: CanvasArea,
+		getNextSeed: NextSeed,
+	) => void
+	const drawOutlineOfText: DrawingMethod = (context, offset, area, getNextSeed) => {
 		const { width, height } = area
 		const fontSize = 2.99;
 		context.font = `${height / fontSize}px ${cssFontFamily.replace(/!important/gm, '')}`;
@@ -194,7 +234,7 @@ const paintCanvas = ({
 		);
 	}
 
-  const createCircularArc = (context, offset, area, getNextSeed) => {
+  const createCircularArc: DrawingMethod = (context, offset, area, getNextSeed) => {
     const { width, height } = area
     context.beginPath()
     context.arc(
@@ -207,7 +247,7 @@ const paintCanvas = ({
     context.stroke()
   }
 
-  const createBezierCurve = (context, offset, area, getNextSeed) => {
+  const createBezierCurve: DrawingMethod = (context, offset, area, getNextSeed) => {
     const { width, height } = area
     context.beginPath()
     context.moveTo(
@@ -225,7 +265,7 @@ const paintCanvas = ({
     context.stroke()
   }
 
-  const createQuadraticCurve = (context, offset, area, getNextSeed) => {
+  const createQuadraticCurve: DrawingMethod = (context, offset, area, getNextSeed) => {
     const { width, height } = area
     context.beginPath()
     context.moveTo(
@@ -241,7 +281,7 @@ const paintCanvas = ({
     context.stroke()
   }
 
-  const createEllipticalArc = (context, offset, area, getNextSeed) => {
+  const createEllipticalArc: DrawingMethod = (context, offset, area, getNextSeed) => {
     if (!('ellipse' in context)) {
       return
     }
@@ -259,7 +299,7 @@ const paintCanvas = ({
     context.stroke()
   }
 
-  const methods = [
+  const methods: DrawingMethod[] = [
     createCircularArc,
     createBezierCurve,
     createQuadraticCurve,
@@ -268,12 +308,12 @@ const paintCanvas = ({
 	if (!IS_WEBKIT) methods.push(createEllipticalArc) // unstable in webkit
 	if (strokeText) methods.push(drawOutlineOfText)
 
-  ;[...Array(rounds)].forEach((x) => {
+	  ;[...Array(rounds)].forEach(() => {
     addRandomCanvasGradient(context, offset, area, colors, getNextSeed)
     context.shadowBlur = patchSeed(getNextSeed(), offset, maxShadowBlur, true)
-    context.shadowColor = colors[patchSeed(getNextSeed(), offset, colors.length)]
+    context.shadowColor = colors[patchSeed(getNextSeed(), offset, colors.length)] ?? '#000'
     const nextMethod = methods[patchSeed(getNextSeed(), offset, methods.length)]
-    nextMethod(context, offset, area, getNextSeed)
+	  nextMethod?.(context, offset, area, getNextSeed)
     context.fill()
   })
 
@@ -294,7 +334,7 @@ export default async function getCanvas2d() {
 			lieProps['CanvasRenderingContext2D.strokeText']
 		)
 		const codePointLie = lieProps['String.fromCodePoint']
-		let textMetricsLie = (
+		let textMetricsLie = !!(
 			lieProps['CanvasRenderingContext2D.measureText'] ||
 			lieProps['TextMetrics.actualBoundingBoxAscent'] ||
 			lieProps['TextMetrics.actualBoundingBoxDescent'] ||
@@ -304,7 +344,7 @@ export default async function getCanvas2d() {
 			lieProps['TextMetrics.fontBoundingBoxDescent'] ||
 			lieProps['TextMetrics.width']
 		)
-		let lied = (
+		let lied = !!(
 			dataLie ||
 			contextLie ||
 			imageDataLie ||
@@ -313,7 +353,7 @@ export default async function getCanvas2d() {
 		) || false
 
 		// create canvas context
-		let win = window
+		let win: Window = window
 		if (!LIKE_BRAVE && PHANTOM_DARKNESS) {
 			win = PHANTOM_DARKNESS
 		}
@@ -322,14 +362,15 @@ export default async function getCanvas2d() {
 		const canvas = doc.createElement('canvas')
 		const context = canvas.getContext('2d')
 		const canvasCPU = doc.createElement('canvas')
-		const contextCPU = canvasCPU.getContext('2d', {
-			desynchronized: true,
-			willReadFrequently: true,
-		})
+			const contextCPU = canvasCPU.getContext('2d', {
+				desynchronized: true,
+				willReadFrequently: true,
+			}) ?? canvasCPU.getContext('2d')
 
-		if (!context) {
-			throw new Error('canvas context blocked')
-		}
+			if (!context) {
+				logTestResult({ test: 'canvas 2d', passed: false })
+				return
+			}
 
 		await queueEvent(timer)
 		const imageSizeMax = IS_WEBKIT ? 50 : 75 // webkit is unstable
@@ -350,7 +391,7 @@ export default async function getCanvas2d() {
 		// TextMetrics: get emoji set and system
 		await queueEvent(timer)
 		context.font = `10px ${CSS_FONT_FAMILY.replace(/!important/gm, '')}`
-		const pattern = new Set()
+		const pattern = new Set<string>()
 		const emojiSet = EMOJIS.reduce((emojiSet, emoji) => {
 			const {
 				actualBoundingBoxAscent,
@@ -375,7 +416,7 @@ export default async function getCanvas2d() {
 				emojiSet.add(emoji)
 			}
 			return emojiSet
-		}, new Set())
+		}, new Set<string>())
 
 		// textMetrics System Sum
 		const textMetricsSystemSum = 0.00001 * [...pattern].map((x) => {
@@ -438,7 +479,7 @@ export default async function getCanvas2d() {
 		context.closePath()
 		context.fill()
 		const imageDataLowEntropy = context.getImageData(0, 0, 2, 2).data.join('')
-		const KnownImageData: Record<string, string[]> = {
+			const KnownImageData: { BLINK: string[], GECKO: string[], WEBKIT: string[] } = {
 			BLINK: [
 				'255255255255178178178255246246246255555555255',
 				'255255255255192192192255240240240255484848255',
@@ -481,8 +522,8 @@ export default async function getCanvas2d() {
 			sendToTrash('CanvasRenderingContext2D.getImageData', 'suspicious pixel data')
 		}
 
-		const getTextMetricsFloatLie = (context) => {
-			const isFloat = (n) => n % 1 !== 0
+		const getTextMetricsFloatLie = (context: CanvasRenderingContext2D) => {
+			const isFloat = (n: number) => n % 1 !== 0
 			const {
 				actualBoundingBoxAscent: abba,
 				actualBoundingBoxDescent: abbd,
@@ -528,6 +569,6 @@ export default async function getCanvas2d() {
 	}	catch (error) {
 		logTestResult({ test: 'canvas 2d', passed: false })
 		captureError(error)
-		return
+		throw error
 	}
 }

@@ -1,7 +1,15 @@
-// @ts-nocheck
 import { attempt, captureError } from '../errors'
 import { lieProps, documentLie } from '../lies'
 import { createTimer, logTestResult } from '../utils/helpers'
+
+interface MathResult {
+	result: number | number[]
+	chrome: boolean
+	firefox: boolean
+	torBrowser: boolean
+	safari: boolean
+}
+
 export default function getMaths() {
 	try {
 		const timer = createTimer()
@@ -30,21 +38,27 @@ export default function getMaths() {
 			'tan',
 			'tanh',
 			'pow',
-		]
+		] as const
 		let lied = false
+		const getMathFunction = (name: string): ((...values: number[]) => number) | undefined => {
+			const value: unknown = Reflect.get(Math, name)
+			return typeof value == 'function' ? value.bind(Math) : undefined
+		}
 
 		check.forEach((prop) => {
-			if (!!lieProps[`Math.${prop}`]) {
+			if (lieProps[`Math.${prop}`]) {
 				lied = true
 			}
+			const mathFunction = getMathFunction(prop)
+			if (!mathFunction) return
 			const test = (
 				prop == 'cos' ? [1e308] :
 				prop == 'acos' || prop == 'asin' || prop == 'atanh' ? [0.5] :
 				prop == 'pow' || prop == 'atan2' ? [Math.PI, 2] :
 				[Math.PI]
 			)
-			const res1 = Math[prop](...test)
-			const res2 = Math[prop](...test)
+			const res1 = mathFunction(...test)
+			const res2 = mathFunction(...test)
 			const matching = isNaN(res1) && isNaN(res2) ? true : res1 == res2
 			if (!matching) {
 				lied = true
@@ -56,7 +70,16 @@ export default function getMaths() {
 
 		const n = 0.123
 		const bigN = 5.860847362277284e+38
-		const fns = [
+		type MathTest = readonly [
+			name: string,
+			args: number[],
+			expression: string,
+			chrome: number,
+			firefox: number,
+			torBrowser: number,
+			safari: number,
+		]
+		const fns: MathTest[] = [
 			['acos', [n], `acos(${n})`, 1.4474840516030247, NaN, NaN, 1.4474840516030245],
 			['acos', [Math.SQRT1_2], 'acos(Math.SQRT1_2)', 0.7853981633974483, NaN, NaN, NaN],
 
@@ -66,7 +89,7 @@ export default function getMaths() {
 
 			['asin', [n], `asin(${n})`, 0.12331227519187199, NaN, NaN, NaN],
 
-			['asinh', [1e300], 'asinh(1e308)', 691.4686750787736, NaN, NaN, NaN],
+			['asinh', [1e300], 'asinh(1e300)', 691.4686750787736, NaN, NaN, NaN],
 			['asinh', [Math.PI], 'asinh(Math.PI)', 1.8622957433108482, NaN, NaN, NaN],
 
 			['atan', [2], 'atan(2)', 1.1071487177940904, NaN, NaN, 1.1071487177940906],
@@ -75,7 +98,7 @@ export default function getMaths() {
 			['atanh', [0.5], 'atanh(0.5)', 0.5493061443340548, NaN, NaN, 0.5493061443340549],
 
 			['atan2', [1e-310, 2], 'atan2(1e-310, 2)', 5e-311, NaN, NaN, NaN],
-			['atan2', [Math.PI, 2], 'atan2(Math.PI)', 1.0038848218538872, NaN, NaN, NaN],
+			['atan2', [Math.PI, 2], 'atan2(Math.PI, 2)', 1.0038848218538872, NaN, NaN, NaN],
 
 			['cbrt', [100], 'cbrt(100)', 4.641588833612779, NaN, NaN, NaN],
 			['cbrt', [Math.PI], 'cbrt(Math.PI)', 1.4645918875615231, NaN, NaN, 1.4645918875615234],
@@ -180,21 +203,24 @@ export default function getMaths() {
 			['pow', [Math.LN10, -100], 'pow(Math.LN10, -100)', 6.003867926738829e-37, 6.003867926738811e-37, NaN, NaN],
 			['pow', [Math.LOG2E, -100], 'pow(Math.LOG2E, -100)', 1.20933355845501e-16, 1.2093335584550061e-16, NaN, NaN],
 			['pow', [Math.LOG10E, -100], 'pow(Math.LOG10E, -100)', 1.6655929347585958e+36, 1.665592934758592e+36, NaN, 1.6655929347585955e+36],
-			['pow', [Math.SQRT1_2, -100], 'pow(Math.SQRT1_2, -100)', 1125899906842616.2, 1125899906842611.5, NaN, NaN],
+			['pow', [Math.SQRT1_2, -100], 'pow(Math.SQRT1_2, -100)', 1125899906842616.25, 1125899906842611.5, NaN, NaN],
 			['pow', [Math.SQRT2, -100], 'pow(Math.SQRT2, -100)', 8.881784197001191e-16, 8.881784197001154e-16, NaN, NaN],
 
 			['polyfill', [2e-3 ** -100], 'polyfill pow(2e-3, -100)', 7.888609052210102e+269, 7.888609052210126e+269, NaN, NaN],
 		]
 
-		const data = {}
+		const data: Record<string, MathResult | undefined> = {}
 		fns.forEach((fn) => {
-			data[fn[2]] = attempt(() => {
-				// @ts-ignore
-				const result = fn[0] != 'polyfill' ? Math[fn[0]](...fn[1]) : fn[1]
-				const chrome = result == fn[3]
-				const firefox = fn[4] ? result == fn[4] : false
-				const torBrowser = fn[5] ? result == fn[5] : false
-				const safari = fn[6] ? result == fn[6] : false
+			const [name, args, expression, chromeExpected, firefoxExpected, torExpected, safariExpected] = fn
+			data[expression] = attempt(() => {
+				const mathFunction = getMathFunction(name)
+				if (name != 'polyfill' && !mathFunction) throw new TypeError(`Math.${name} is unavailable`)
+				const result = name != 'polyfill' ? mathFunction!(...args) : args
+				const comparableResult = typeof result == 'number' ? result : Number(result)
+				const chrome = comparableResult == chromeExpected
+				const firefox = firefoxExpected ? comparableResult == firefoxExpected : false
+				const torBrowser = torExpected ? comparableResult == torExpected : false
+				const safari = safariExpected ? comparableResult == safariExpected : false
 				return { result, chrome, firefox, torBrowser, safari }
 			})
 		})
@@ -204,6 +230,6 @@ export default function getMaths() {
 	} catch (error) {
 		logTestResult({ test: 'math', passed: false })
 		captureError(error)
-		return
+		throw error
 	}
 }

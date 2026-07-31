@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import {
   ALGORITHM_VERSION,
@@ -10,10 +10,22 @@ import {
   LIBRARY_VERSION,
   type FingerprintResult,
 } from '../src/index.js';
-import { buildFocusedHashes } from '../src/runtime.js';
+import { hashValue } from '../src/hash.js';
+import {
+  buildFocusedHashes,
+  buildStableFingerprint,
+  snapshot,
+} from '../src/runtime.js';
 
 let result: FingerprintResult;
 let webRtcResult: FingerprintResult;
+
+function containsComponentHash(value: unknown): boolean {
+  if (value === null || typeof value !== 'object') return false;
+  return Object.entries(value).some(
+    ([key, nested]) => key === '$hash' || containsComponentHash(nested),
+  );
+}
 
 beforeAll(async () => {
   const collector = await load({
@@ -75,6 +87,12 @@ describe('frontend API', () => {
     expect(webRtcResult.auxiliary.webRtc.status).not.toBe('skipped');
   });
 
+  it('keeps core identifiers stable when only auxiliary policy changes', () => {
+    expect(webRtcResult.visitorId).toBe(result.visitorId);
+    expect(webRtcResult.rawVisitorId).toBe(result.rawVisitorId);
+    expect(webRtcResult.fuzzyHash).toBe(result.fuzzyHash);
+  });
+
   it('keeps navigator signals when the worker is unavailable', async () => {
     const collector = await load({
       worker: {
@@ -94,11 +112,232 @@ describe('frontend API', () => {
   it('omits focused hashes whose source component is unavailable', async () => {
     await expect(buildFocusedHashes({})).resolves.toEqual({});
 
-    const presentUndefined = await buildFocusedHashes({
+    const partialComponents = await buildFocusedHashes({
+      canvasWebgl: {
+        lied: false,
+        parameters: { UNMASKED_VENDOR_WEBGL: undefined },
+      },
+      clientRects: { lied: false },
+      css: { computedStyle: null, system: undefined },
       media: { mimeTypes: undefined },
     });
-    expect(presentUndefined.mediaMimeTypes).toMatch(/^[a-f\d]{64}$/);
-    expect(presentUndefined).not.toHaveProperty('cssSystem');
+    expect(partialComponents).toEqual({});
+
+    const presentEmptyValue = await buildFocusedHashes({
+      media: { mimeTypes: [] },
+    });
+    expect(presentEmptyValue.mediaMimeTypes).toMatch(/^[a-f\d]{64}$/);
+  });
+
+  it('uses canonical hashing for focused signal values', async () => {
+    const first = await buildFocusedHashes({
+      media: {
+        mimeTypes: { missing: undefined, notANumber: Number.NaN },
+      },
+    });
+    const reordered = await buildFocusedHashes({
+      media: {
+        mimeTypes: { notANumber: Number.NaN, missing: undefined },
+      },
+    });
+    const sparse: unknown[] = [];
+    sparse.length = 1;
+    const sparseValue = await buildFocusedHashes({
+      media: { mimeTypes: sparse },
+    });
+    const undefinedValue = await buildFocusedHashes({
+      media: { mimeTypes: [undefined] },
+    });
+
+    expect(first.mediaMimeTypes).toBe(reordered.mediaMimeTypes);
+    expect(sparseValue.mediaMimeTypes).not.toBe(undefinedValue.mediaMimeTypes);
+  });
+
+  it('preserves detector data when structuredClone is unavailable', () => {
+    const nativeStructuredClone = globalThis.structuredClone;
+    const sparse: unknown[] = [];
+    sparse.length = 1;
+    const source: {
+      bigint: bigint;
+      negativeZero: number;
+      notANumber: number;
+      self?: unknown;
+      sparse: unknown[];
+      undefinedValue: undefined;
+    } = {
+      bigint: 2n,
+      negativeZero: -0,
+      notANumber: Number.NaN,
+      sparse,
+      undefinedValue: undefined,
+    };
+    source.self = source;
+    Object.defineProperty(globalThis, 'structuredClone', {
+      configurable: true,
+      value: undefined,
+      writable: true,
+    });
+
+    try {
+      const copy = snapshot(source);
+      expect(copy).not.toBe(source);
+      expect(copy.self).toBe(copy);
+      expect(copy.bigint).toBe(2n);
+      expect(Object.is(copy.negativeZero, -0)).toBe(true);
+      expect(Number.isNaN(copy.notANumber)).toBe(true);
+      expect(copy).toHaveProperty('undefinedValue', undefined);
+      expect(copy.sparse).toHaveLength(1);
+      expect(0 in copy.sparse).toBe(false);
+    } finally {
+      Object.defineProperty(globalThis, 'structuredClone', {
+        configurable: true,
+        value: nativeStructuredClone,
+        writable: true,
+      });
+    }
+  });
+
+  it('normalizes Error values created in another window realm', async () => {
+    const iframe = document.createElement('iframe');
+    document.body.append(iframe);
+
+    try {
+      const realm = iframe.contentWindow as Window & typeof globalThis;
+      const error = new realm.TypeError('iframe failure');
+      error.stack = 'iframe stack';
+      const components = {
+        sample: { durationMs: 1, status: 'fulfilled', value: error },
+      } as const;
+
+      await expect(hashComponents(components)).resolves.toMatch(
+        /^[a-f\d]{64}$/,
+      );
+      expect(JSON.parse(componentsToDebugString(components))).toEqual({
+        sample: {
+          durationMs: 1,
+          status: 'fulfilled',
+          value: {
+            message: 'iframe failure',
+            name: 'TypeError',
+            stack: 'iframe stack',
+          },
+        },
+      });
+    } finally {
+      iframe.remove();
+    }
+  });
+
+  it('hashes plain objects created in another window realm', async () => {
+    const iframe = document.createElement('iframe');
+    document.body.append(iframe);
+
+    try {
+      const realm = iframe.contentWindow as Window & typeof globalThis;
+      const value = new realm.Object() as Record<string, unknown>;
+      value.z = 1;
+      value.a = { nested: true };
+      const crossRealmHash = await hashComponents({
+        sample: { durationMs: 1, status: 'fulfilled', value },
+      });
+      const localHash = await hashComponents({
+        sample: {
+          durationMs: 1,
+          status: 'fulfilled',
+          value: { a: { nested: true }, z: 1 },
+        },
+      });
+
+      expect(crossRealmHash).toBe(localHash);
+    } finally {
+      iframe.remove();
+    }
+  });
+
+  it('excludes low-confidence GPU entropy from the stable fingerprint', () => {
+    const stable = buildStableFingerprint(
+      {
+        canvas2d: { lied: false },
+        canvasWebgl: {
+          $hash: 'hash-containing-raw-gpu-entropy',
+          extensions: [],
+          gpu: {
+            compressedGPU: 'secret-compressed-gpu',
+            confidence: 'low',
+          },
+          lied: false,
+          parameters: {
+            UNMASKED_RENDERER_WEBGL: 'secret-renderer',
+            UNMASKED_VENDOR_WEBGL: 'secret-vendor',
+          },
+        },
+      } as never,
+      false,
+      {},
+    );
+
+    expect(stable.canvasWebgl).not.toHaveProperty('$hash');
+    expect(stable.canvasWebgl).not.toHaveProperty('gpu');
+    expect(stable.canvasWebgl?.parameters).toHaveProperty(
+      'UNMASKED_RENDERER_WEBGL',
+      undefined,
+    );
+    expect(stable.canvasWebgl?.parameters).toHaveProperty(
+      'UNMASKED_VENDOR_WEBGL',
+      undefined,
+    );
+    expect(JSON.stringify(stable.canvasWebgl)).not.toContain('secret');
+  });
+
+  it('excludes enrichment hashes from every stable signal', () => {
+    const stable = buildStableFingerprint(
+      {
+        media: {
+          $hash: 'legacy-media-hash',
+          mimeTypes: [{ mimeType: 'audio/test' }],
+        },
+        offlineAudioContext: {
+          $hash: 'legacy-audio-hash',
+          lied: false,
+          sampleSum: 42,
+        },
+      } as never,
+      false,
+      {},
+    );
+
+    expect(containsComponentHash(stable)).toBe(false);
+    expect(containsComponentHash(result.stableComponents)).toBe(false);
+    expect(stable.media).toEqual({
+      mimeTypes: [{ mimeType: 'audio/test' }],
+    });
+    expect(stable.offlineAudioContext).toEqual({
+      lied: false,
+      sampleSum: 42,
+    });
+  });
+
+  it('keeps stable components independent from mutable result values', async () => {
+    const mediaType = result.values.media?.mimeTypes?.[0] as
+      { mimeType: string } | undefined;
+    expect(mediaType).toBeDefined();
+    const originalMimeType = mediaType?.mimeType;
+    const stableBeforeMutation = structuredClone(result.stableComponents);
+
+    try {
+      if (mediaType !== undefined) mediaType.mimeType = 'mutated-after-hash';
+      expect(result.stableComponents).toEqual(stableBeforeMutation);
+      await expect(
+        hashValue({
+          algorithmVersion: result.algorithmVersion,
+          components: result.stableComponents,
+        }),
+      ).resolves.toBe(result.visitorId);
+    } finally {
+      if (mediaType !== undefined && originalMimeType !== undefined) {
+        mediaType.mimeType = originalMimeType;
+      }
+    }
   });
 
   it('loads the packaged worker without a URL override', async () => {
@@ -190,19 +429,47 @@ describe('frontend API', () => {
     ).rejects.toMatchObject({ name: 'TimeoutError' });
   });
 
-  it('enforces timeout when an auxiliary browser promise never settles', async () => {
-    const nativeFetch = window.fetch;
-    window.fetch = (() => new Promise<Response>(() => {})) as typeof fetch;
+  it('does not let a stalled auxiliary promise hold cancellation or the queue', async () => {
+    const storage = navigator.storage;
+    let estimateOwner: object | null = storage;
+    while (
+      estimateOwner !== null &&
+      !Object.prototype.hasOwnProperty.call(estimateOwner, 'estimate')
+    ) {
+      estimateOwner = Object.getPrototypeOf(estimateOwner) as object | null;
+    }
+    if (estimateOwner === null) {
+      throw new TypeError('StorageManager.estimate has no property owner.');
+    }
+    const nativeEstimate = Object.getOwnPropertyDescriptor(
+      estimateOwner,
+      'estimate',
+    );
+    if (nativeEstimate === undefined) {
+      throw new TypeError('StorageManager.estimate has no descriptor.');
+    }
+    let estimateCalls = 0;
+    Object.defineProperty(estimateOwner, 'estimate', {
+      configurable: true,
+      value: () => {
+        estimateCalls += 1;
+        return new Promise<StorageEstimate>(() => undefined);
+      },
+    });
     const collector = await load({
       worker: { strategy: 'auto', url: '/dist/worker.js' },
     });
+    const controller = new AbortController();
+    const reason = new DOMException('cancel stalled auxiliary', 'AbortError');
+    const pending = collector.collect({ signal: controller.signal });
 
     try {
-      await expect(collector.collect({ timeoutMs: 25 })).rejects.toMatchObject({
-        name: 'TimeoutError',
-      });
+      await vi.waitFor(() => expect(estimateCalls).toBeGreaterThan(0));
+      controller.abort(reason);
+      await expect(pending).rejects.toBe(reason);
     } finally {
-      window.fetch = nativeFetch;
+      controller.abort(reason);
+      Object.defineProperty(estimateOwner, 'estimate', nativeEstimate);
     }
 
     await expect(

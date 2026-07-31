@@ -1,31 +1,47 @@
-// @ts-nocheck
 import { captureError } from '../errors'
 import { prototypeLies } from '../lies'
 import { hashMini } from '../utils/crypto'
-import { createTimer, queueEvent, IS_BLINK, IS_GECKO, braveBrowser, getBraveMode, logTestResult } from '../utils/helpers'
+import {
+	createTimer,
+	queueEvent,
+	IS_BLINK,
+	IS_GECKO,
+	braveBrowser,
+	getBraveMode,
+	logTestResult,
+} from '../utils/helpers'
+
+interface ResistanceData {
+	privacy?: string
+	security?: Record<string, boolean>
+	mode?: string
+	extension?: string
+	extensionHashPattern?: Record<string, string>
+	engine: string
+}
+
 export default async function getResistance() {
 	try {
 		const timer = createTimer()
 		await queueEvent(timer)
-		const data = {
+		const data: ResistanceData = {
 			privacy: undefined,
 			security: undefined,
 			mode: undefined,
 			extension: undefined,
-			engine: (
-				IS_BLINK ? 'Blink' :
-					IS_GECKO ? 'Gecko' :
-						''
-			),
+			engine: IS_BLINK ? 'Blink' : IS_GECKO ? 'Gecko' : '',
 		}
 		// Firefox/Tor Browser
-		const regex = (n) => new RegExp(`${n}+$`)
-		const delay = (ms, baseNumber, baseDate) => new Promise((resolve) => setTimeout(() => {
-			const date = baseDate ? baseDate : +new Date()
-			// @ts-ignore
-			const value = regex(baseNumber).test(date) ? regex(baseNumber).exec(date)[0] : date
-			return resolve(value)
-		}, ms))
+		const regex = (n: number) => new RegExp(`${n}+$`)
+		const delay = (ms: number, baseNumber: number, baseDate?: number) =>
+			new Promise<number | string>((resolve) =>
+				setTimeout(() => {
+					const date = baseDate ?? +new Date()
+					const match = regex(baseNumber).exec(String(date))
+					const value = match?.[0] ?? date
+					return resolve(value)
+				}, ms),
+			)
 		const getTimerPrecision = async () => {
 			const baseDate = +new Date()
 			const baseNumber = +('' + baseDate).slice(-1)
@@ -52,7 +68,7 @@ export default async function getResistance() {
 			const lastCharI = ('' + i).slice(-1)
 			const lastCharJ = ('' + j).slice(-1)
 
-			const protection = (
+			const protection =
 				lastCharA == lastCharB &&
 				lastCharA == lastCharC &&
 				lastCharA == lastCharD &&
@@ -62,21 +78,17 @@ export default async function getResistance() {
 				lastCharA == lastCharH &&
 				lastCharA == lastCharI &&
 				lastCharA == lastCharJ
-			)
 			const baseLen = ('' + a).length
 			const collection = [a, b, c, d, e, f, g, h, i, j]
 			return {
 				protection,
-				delays: collection.map((n) => ('' + n).length > baseLen ? ('' + n).slice(-baseLen) : n),
+				delays: collection.map((n) => (('' + n).length > baseLen ? ('' + n).slice(-baseLen) : n)),
 				precision: protection ? Math.min(...collection.map((val) => ('' + val).length)) : undefined,
 				precisionValue: protection ? lastCharA : undefined,
 			}
 		}
 
-		const [
-			isBrave,
-			timerPrecision,
-		] = await Promise.all([
+		const [isBrave, timerPrecision] = await Promise.all([
 			braveBrowser(),
 			IS_BLINK ? undefined : getTimerPrecision(),
 		])
@@ -84,50 +96,36 @@ export default async function getResistance() {
 		if (isBrave) {
 			const braveMode = getBraveMode()
 			data.privacy = 'Brave'
-			// @ts-ignore
 			data.security = {
-				'FileSystemWritableFileStream': 'FileSystemWritableFileStream' in window,
-				'Serial': 'Serial' in window,
-				'ReportingObserver': 'ReportingObserver' in window,
+				FileSystemWritableFileStream: 'FileSystemWritableFileStream' in window,
+				Serial: 'Serial' in window,
+				ReportingObserver: 'ReportingObserver' in window,
 			}
-			data.mode = (
-				braveMode.allow ? 'allow' :
-				braveMode.standard ? 'standard' :
-				braveMode.strict ? 'strict' :
-				''
-			)
+			data.mode = braveMode.allow ? 'allow' : braveMode.standard ? 'standard' : braveMode.strict ? 'strict' : ''
 		}
 
 		const { protection } = timerPrecision || {}
 		if (IS_GECKO && protection) {
-			const features = {
-				'OfflineAudioContext': 'OfflineAudioContext' in window, // dom.webaudio.enabled
-				'WebGL2RenderingContext': 'WebGL2RenderingContext' in window, // webgl.enable-webgl2
-				'WebAssembly': 'WebAssembly' in window, // javascript.options.wasm
-				'maxTouchPoints': 'maxTouchPoints' in navigator,
-				'RTCRtpTransceiver': 'RTCRtpTransceiver' in window,
-				'MediaDevices': 'MediaDevices' in window,
-				'Credential': 'Credential' in window,
+			const features: Record<string, boolean> & { WebAssembly: boolean } = {
+				OfflineAudioContext: 'OfflineAudioContext' in window, // dom.webaudio.enabled
+				WebGL2RenderingContext: 'WebGL2RenderingContext' in window, // webgl.enable-webgl2
+				WebAssembly: 'WebAssembly' in window, // javascript.options.wasm
+				maxTouchPoints: 'maxTouchPoints' in navigator,
+				RTCRtpTransceiver: 'RTCRtpTransceiver' in window,
+				MediaDevices: 'MediaDevices' in window,
+				Credential: 'Credential' in window,
 			}
 			const featureKeys = Object.keys(features)
-			const targetSet = new Set([
-				'RTCRtpTransceiver',
-				'MediaDevices',
-				'Credential',
-			])
-			const torBrowser = featureKeys.filter((key) => targetSet.has(key) && !features[key]).length == targetSet.size
+			const targetSet = new Set(['RTCRtpTransceiver', 'MediaDevices', 'Credential'])
+			const torBrowser =
+				featureKeys.filter((key) => targetSet.has(key) && !features[key]).length == targetSet.size
 			const safer = !features.WebAssembly
 			data.privacy = torBrowser ? 'Tor Browser' : 'Firefox'
-			// @ts-ignore
 			data.security = {
-				'reduceTimerPrecision': true,
+				reduceTimerPrecision: true,
 				...features,
 			}
-			data.mode = (
-				!torBrowser ? 'resistFingerprinting' :
-					safer ? 'safer' :
-						'standard'
-			)
+			data.mode = !torBrowser ? 'resistFingerprinting' : safer ? 'safer' : 'standard'
 		}
 
 		// extension
@@ -156,8 +154,26 @@ export default async function getResistance() {
 				// [FF, FF Anti OFF, Chrome, Chrome Anti Off, no iframe Chrome, no iframe Chrome Anti Off]
 				contentDocumentHash: ['945b0c78', '15771efa', '403a1a21', '55e9b959'],
 				contentWindowHash: ['945b0c78', '15771efa', '403a1a21', '55e9b959'],
-				createElementHash: ['3dd86d6f', 'cc7cb598', '4237b44c', '1466aaf0', '0cb0c682', '73c662d9', '72b1ee2b', 'ae3d02c9'],
-				getElementByIdHash: ['3dd86d6f', 'cc7cb598', '4237b44c', '1466aaf0', '0cb0c682', '73c662d9', '72b1ee2b', 'ae3d02c9'],
+				createElementHash: [
+					'3dd86d6f',
+					'cc7cb598',
+					'4237b44c',
+					'1466aaf0',
+					'0cb0c682',
+					'73c662d9',
+					'72b1ee2b',
+					'ae3d02c9',
+				],
+				getElementByIdHash: [
+					'3dd86d6f',
+					'cc7cb598',
+					'4237b44c',
+					'1466aaf0',
+					'0cb0c682',
+					'73c662d9',
+					'72b1ee2b',
+					'ae3d02c9',
+				],
 				getImageDataHash: ['044f14c2', 'db60d7f9', '15771efa', 'db60d7f9', '55e9b959'],
 				toBlobHash: ['044f14c2', '15771efa', 'afec348d', '55e9b959', '0dbbf456'],
 				toDataURLHash: ['ecb498d9', '15771efa', '6b838fb6', 'd19104ec', '6985d315', '55e9b959', 'fe88259f'],
@@ -308,8 +324,7 @@ export default async function getResistance() {
 			pixelDepthHash: hashMini(prototypeLies['Screen.pixelDepth']),
 		}
 
-		data.extensionHashPattern = Object.keys(hash).reduce((acc, key) => {
-			const val = hash[key]
+		data.extensionHashPattern = Object.entries(hash).reduce<Record<string, string>>((acc, [key, val]) => {
 			if (val == disabled) {
 				return acc
 			}
@@ -317,7 +332,17 @@ export default async function getResistance() {
 			return acc
 		}, {})
 
-		const getExtension = ({ pattern, hash, prototypeLiesLen }) => {
+		type ExtensionPattern = typeof pattern
+		type ExtensionHashes = typeof hash
+		const getExtension = ({
+			pattern,
+			hash,
+			prototypeLiesLen,
+		}: {
+			pattern: ExtensionPattern
+			hash: ExtensionHashes
+			prototypeLiesLen: number
+		}): string | undefined => {
 			const {
 				noscript,
 				trace,
@@ -334,36 +359,43 @@ export default async function getResistance() {
 
 			const disabled = 'c767712b'
 			if (prototypeLiesLen) {
-				if (prototypeLiesLen >= 7 &&
+				if (
+					prototypeLiesLen >= 7 &&
 					trace.contentDocumentHash.includes(hash.contentDocumentHash) &&
 					trace.contentWindowHash.includes(hash.contentWindowHash) &&
 					trace.createElementHash.includes(hash.createElementHash) &&
 					trace.getElementByIdHash.includes(hash.getElementByIdHash) &&
 					trace.toDataURLHash.includes(hash.toDataURLHash) &&
 					trace.toBlobHash.includes(hash.toBlobHash) &&
-					trace.getImageDataHash.includes(hash.getImageDataHash)) {
+					trace.getImageDataHash.includes(hash.getImageDataHash)
+				) {
 					return 'Trace'
 				}
-				if (prototypeLiesLen >= 7 &&
+				if (
+					prototypeLiesLen >= 7 &&
 					cydec.contentDocumentHash.includes(hash.contentDocumentHash) &&
 					cydec.contentWindowHash.includes(hash.contentWindowHash) &&
 					cydec.createElementHash.includes(hash.createElementHash) &&
 					cydec.getElementByIdHash.includes(hash.getElementByIdHash) &&
 					cydec.toDataURLHash.includes(hash.toDataURLHash) &&
 					cydec.toBlobHash.includes(hash.toBlobHash) &&
-					cydec.getImageDataHash.includes(hash.getImageDataHash)) {
+					cydec.getImageDataHash.includes(hash.getImageDataHash)
+				) {
 					return 'CyDec'
 				}
-				if (prototypeLiesLen >= 6 &&
+				if (
+					prototypeLiesLen >= 6 &&
 					canvasblocker.contentDocumentHash.includes(hash.contentDocumentHash) &&
 					canvasblocker.contentWindowHash.includes(hash.contentWindowHash) &&
 					canvasblocker.appendHash.includes(hash.appendHash) &&
 					canvasblocker.toDataURLHash.includes(hash.toDataURLHash) &&
 					canvasblocker.toBlobHash.includes(hash.toBlobHash) &&
-					canvasblocker.getImageDataHash.includes(hash.getImageDataHash)) {
+					canvasblocker.getImageDataHash.includes(hash.getImageDataHash)
+				) {
 					return 'CanvasBlocker'
 				}
-				if (prototypeLiesLen >= 9 &&
+				if (
+					prototypeLiesLen >= 9 &&
 					chameleon.appendHash.includes(hash.appendHash) &&
 					chameleon.insertAdjacentElementHash.includes(hash.insertAdjacentElementHash) &&
 					chameleon.insertAdjacentHTMLHash.includes(hash.insertAdjacentHTMLHash) &&
@@ -372,10 +404,12 @@ export default async function getResistance() {
 					chameleon.replaceWithHash.includes(hash.replaceWithHash) &&
 					chameleon.appendChildHash.includes(hash.appendChildHash) &&
 					chameleon.insertBeforeHash.includes(hash.insertBeforeHash) &&
-					chameleon.replaceChildHash.includes(hash.replaceChildHash)) {
+					chameleon.replaceChildHash.includes(hash.replaceChildHash)
+				) {
 					return 'Chameleon'
 				}
-				if (prototypeLiesLen >= 7 &&
+				if (
+					prototypeLiesLen >= 7 &&
 					duckduckgo.toDataURLHash.includes(hash.toDataURLHash) &&
 					duckduckgo.toBlobHash.includes(hash.toBlobHash) &&
 					duckduckgo.getImageDataHash.includes(hash.getImageDataHash) &&
@@ -391,31 +425,39 @@ export default async function getResistance() {
 					duckduckgo.availTopHash.includes(hash.availTopHash) &&
 					duckduckgo.availWidthHash.includes(hash.availWidthHash) &&
 					duckduckgo.colorDepthHash.includes(hash.colorDepthHash) &&
-					duckduckgo.pixelDepthHash.includes(hash.pixelDepthHash)) {
+					duckduckgo.pixelDepthHash.includes(hash.pixelDepthHash)
+				) {
 					return 'DuckDuckGo'
 				}
-				if (prototypeLiesLen >= 2 &&
+				if (
+					prototypeLiesLen >= 2 &&
 					privacybadger.getImageDataHash.includes(hash.getImageDataHash) &&
-					privacybadger.toDataURLHash.includes(hash.toDataURLHash)) {
+					privacybadger.toDataURLHash.includes(hash.toDataURLHash)
+				) {
 					return 'Privacy Badger'
 				}
-				if (prototypeLiesLen >= 3 &&
+				if (
+					prototypeLiesLen >= 3 &&
 					privacypossum.hardwareConcurrencyHash.includes(hash.hardwareConcurrencyHash) &&
 					privacypossum.availWidthHash.includes(hash.availWidthHash) &&
-					privacypossum.colorDepthHash.includes(hash.colorDepthHash)) {
+					privacypossum.colorDepthHash.includes(hash.colorDepthHash)
+				) {
 					return 'Privacy Possum'
 				}
-				if (prototypeLiesLen >= 2 &&
+				if (
+					prototypeLiesLen >= 2 &&
 					noscript.contentDocumentHash.includes(hash.contentDocumentHash) &&
-					noscript.contentWindowHash.includes(hash.contentDocumentHash) &&
+					noscript.contentWindowHash.includes(hash.contentWindowHash) &&
 					noscript.getContextHash.includes(hash.getContextHash) &&
 					// distinguish NoScript from JShelter
-					hash.hardwareConcurrencyHash == disabled) {
+					hash.hardwareConcurrencyHash == disabled
+				) {
 					return 'NoScript'
 				}
-				if (prototypeLiesLen >= 14 &&
+				if (
+					prototypeLiesLen >= 14 &&
 					jshelter.contentDocumentHash.includes(hash.contentDocumentHash) &&
-					jshelter.contentWindowHash.includes(hash.contentDocumentHash) &&
+					jshelter.contentWindowHash.includes(hash.contentWindowHash) &&
 					jshelter.appendHash.includes(hash.appendHash) &&
 					jshelter.insertAdjacentElementHash.includes(hash.insertAdjacentElementHash) &&
 					jshelter.insertAdjacentHTMLHash.includes(hash.insertAdjacentHTMLHash) &&
@@ -424,10 +466,12 @@ export default async function getResistance() {
 					jshelter.appendChildHash.includes(hash.appendChildHash) &&
 					jshelter.insertBeforeHash.includes(hash.insertBeforeHash) &&
 					jshelter.replaceChildHash.includes(hash.replaceChildHash) &&
-					jshelter.hardwareConcurrencyHash.includes(hash.hardwareConcurrencyHash)) {
+					jshelter.hardwareConcurrencyHash.includes(hash.hardwareConcurrencyHash)
+				) {
 					return 'JShelter'
 				}
-				if (prototypeLiesLen >= 13 &&
+				if (
+					prototypeLiesLen >= 13 &&
 					puppeteerExtra.contentDocumentHash.includes(hash.contentDocumentHash) &&
 					puppeteerExtra.contentWindowHash.includes(hash.contentWindowHash) &&
 					puppeteerExtra.createElementHash.includes(hash.createElementHash) &&
@@ -446,11 +490,13 @@ export default async function getResistance() {
 					puppeteerExtra.toDataURLHash.includes(hash.toDataURLHash) &&
 					puppeteerExtra.toBlobHash.includes(hash.toBlobHash) &&
 					puppeteerExtra.getImageDataHash.includes(hash.getImageDataHash) &&
-					puppeteerExtra.hardwareConcurrencyHash.includes(hash.hardwareConcurrencyHash)) {
+					puppeteerExtra.hardwareConcurrencyHash.includes(hash.hardwareConcurrencyHash)
+				) {
 					return 'puppeteer-extra'
 				}
 
-				if (prototypeLiesLen >= 12 &&
+				if (
+					prototypeLiesLen >= 12 &&
 					fakeBrowser.appendChildHash.includes(hash.appendChildHash) &&
 					fakeBrowser.getContextHash.includes(hash.getContextHash) &&
 					fakeBrowser.toDataURLHash.includes(hash.toDataURLHash) &&
@@ -462,7 +508,8 @@ export default async function getResistance() {
 					fakeBrowser.availTopHash.includes(hash.availTopHash) &&
 					fakeBrowser.availWidthHash.includes(hash.availWidthHash) &&
 					fakeBrowser.colorDepthHash.includes(hash.colorDepthHash) &&
-					fakeBrowser.pixelDepthHash.includes(hash.pixelDepthHash)) {
+					fakeBrowser.pixelDepthHash.includes(hash.pixelDepthHash)
+				) {
 					return 'FakeBrowser'
 				}
 				return
@@ -470,7 +517,6 @@ export default async function getResistance() {
 			return
 		}
 
-		// @ts-ignore
 		data.extension = getExtension({ pattern, hash, prototypeLiesLen })
 
 		logTestResult({ time: timer.stop(), test: 'resistance', passed: true })
@@ -478,6 +524,6 @@ export default async function getResistance() {
 	} catch (error) {
 		logTestResult({ test: 'resistance', passed: false })
 		captureError(error)
-		return
+		throw error
 	}
 }

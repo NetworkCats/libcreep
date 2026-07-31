@@ -1,45 +1,35 @@
-// @ts-nocheck
 import { captureError } from '../errors'
 import { lieProps, documentLie } from '../lies'
 import { createTimer, IS_GECKO, logTestResult, LowerEntropy, IS_WEBKIT } from '../utils/helpers'
 function hasTouch() {
 	try {
 		return 'ontouchstart' in window && !!document.createEvent('TouchEvent')
-	} catch (err) {
+	} catch {
 		return false
 	}
 }
 
-export default async function getScreen(log = true) {
+export default async function getScreen(log: boolean = true) {
 	try {
 		const timer = createTimer()
 		timer.start()
-		let lied = (
+		let lied =
 			lieProps['Screen.width'] ||
 			lieProps['Screen.height'] ||
 			lieProps['Screen.availWidth'] ||
 			lieProps['Screen.availHeight'] ||
 			lieProps['Screen.colorDepth'] ||
-			lieProps['Screen.pixelDepth']
-		) || false
+			lieProps['Screen.pixelDepth'] ||
+			false
 
-		const s = (window.screen || {})
-		const {
-			width,
-			height,
-			availWidth,
-			availHeight,
-			colorDepth,
-			pixelDepth,
-		} = s
+		const s = window.screen || {}
+		const { width, height, availWidth, availHeight, colorDepth, pixelDepth } = s
 
 		const dpr = window.devicePixelRatio || 0
-		const firefoxWithHighDPR = IS_GECKO && (dpr != 1)
+		const firefoxWithHighDPR = IS_GECKO && dpr != 1
 		if (!firefoxWithHighDPR) {
 			// firefox with high dpr requires floating point precision dimensions
-			const matchMediaLie = !matchMedia(
-				`(device-width: ${width}px) and (device-height: ${height}px)`,
-			).matches
+			const matchMediaLie = !matchMedia(`(device-width: ${width}px) and (device-height: ${height}px)`).matches
 			if (matchMediaLie) {
 				lied = true
 				documentLie('Screen', 'failed matchMedia')
@@ -68,11 +58,11 @@ export default async function getScreen(log = true) {
 			lied,
 		}
 
-		log && logTestResult({ time: timer.stop(), test: 'screen', passed: true })
+		if (log) logTestResult({ time: timer.stop(), test: 'screen', passed: true })
 		return data
 	} catch (error) {
-		log && logTestResult({ test: 'screen', passed: false })
+		if (log) logTestResult({ test: 'screen', passed: false })
 		captureError(error)
-		return
+		throw error
 	}
 }

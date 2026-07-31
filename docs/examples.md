@@ -211,13 +211,16 @@ Enabling this option does not itself display a browser permission prompt.
 ## Cancel or time out collection
 
 An abort signal can cancel a queued or active call. `timeoutMs` starts when the
-call begins active collection, after any queue wait.
+public call is made, including any one-shot loading or queue wait.
 
 ```ts
 import { load } from 'libcreep';
 
-const collector = await load();
 const controller = new AbortController();
+const collector = await load({
+  signal: controller.signal,
+  timeoutMs: 10_000,
+});
 
 document.querySelector('#cancel')?.addEventListener('click', () => {
   controller.abort();
@@ -295,9 +298,9 @@ logging by default in production.
 
 ## Use a relocated worker asset
 
-The default worker URL is `worker.js` beside the loaded package entry. If your
-deployment moves it, host the worker and all chunks it imports together and
-pass a URL explicitly:
+The default worker is a self-contained `worker.js` asset beside the loaded
+package entry. Common bundlers copy it from the package automatically. If your
+deployment moves it, host the worker and pass a URL explicitly:
 
 ```ts
 import { load } from 'libcreep';

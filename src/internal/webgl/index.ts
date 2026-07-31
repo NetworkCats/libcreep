@@ -1,9 +1,14 @@
-// @ts-nocheck
 import { attempt, captureError } from '../errors'
 import { lieProps, PHANTOM_DARKNESS } from '../lies'
 import { sendToTrash, getWebGLRendererConfidence, compressWebGLRenderer } from '../trash'
 import { hashMini } from '../utils/crypto'
 import { IS_WEBKIT, createTimer, queueEvent, LIKE_BRAVE, logTestResult, LowerEntropy, getGpuBrand, Analysis } from '../utils/helpers'
+
+type WebGLContext = WebGLRenderingContext | WebGL2RenderingContext
+type WebGLCanvas = HTMLCanvasElement | OffscreenCanvas
+type WebGLContextType = 'webgl' | 'webgl2'
+type Cleanup = () => void
+
 export default async function getCanvasWebgl() {
 	// use short list to improve performance
 	const getParamNames = () => [
@@ -142,7 +147,7 @@ export default async function getCanvasWebgl() {
 		'MAX_CLIENT_WAIT_TIMEOUT_WEBGL',
 	].sort()
 
-	const draw = (gl) => {
+	const draw = (gl?: WebGLContext): Cleanup | undefined => {
 		const isSafari15AndAbove = (
 			'BigInt64Array' in window &&
 			IS_WEBKIT &&
@@ -152,22 +157,34 @@ export default async function getCanvasWebgl() {
 		if (!gl || isSafari15AndAbove) {
 			return
 		}
+		let vertexPosBuffer: WebGLBuffer | null = null
+		let program: WebGLProgram | null = null
+		let vertexShader: WebGLShader | null = null
+		let fragmentShader: WebGLShader | null = null
+		const cleanup = () => {
+			try { if (vertexPosBuffer) gl.deleteBuffer(vertexPosBuffer) } catch {}
+			try { if (vertexShader) gl.deleteShader(vertexShader) } catch {}
+			try { if (fragmentShader) gl.deleteShader(fragmentShader) } catch {}
+			try { if (program) gl.deleteProgram(program) } catch {}
+		}
 
-		// gl.clearColor(0.47, 0.7, 0.78, 1)
-		gl.clear(gl.COLOR_BUFFER_BIT)
+		try {
+			// gl.clearColor(0.47, 0.7, 0.78, 1)
+			gl.clear(gl.COLOR_BUFFER_BIT)
 
-		// based on https://github.com/Valve/fingerprintjs2/blob/master/fingerprint2.js
-		const vertexPosBuffer = gl.createBuffer()
-		gl.bindBuffer(gl.ARRAY_BUFFER, vertexPosBuffer)
-		const vertices = new Float32Array([-0.9, -0.7, 0, 0.8, -0.7, 0, 0, 0.5, 0])
-		gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW)
+			// based on https://github.com/Valve/fingerprintjs2/blob/master/fingerprint2.js
+			vertexPosBuffer = gl.createBuffer()
+			gl.bindBuffer(gl.ARRAY_BUFFER, vertexPosBuffer)
+			const vertices = new Float32Array([-0.9, -0.7, 0, 0.8, -0.7, 0, 0, 0.5, 0])
+			gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW)
 
-		// create program
-		const program = gl.createProgram()
+			// create program
+			program = gl.createProgram()
 
-		// compile and attach vertex shader
-		const vertexShader = gl.createShader(gl.VERTEX_SHADER)
-		gl.shaderSource(vertexShader, `
+			// compile and attach vertex shader
+			vertexShader = gl.createShader(gl.VERTEX_SHADER)
+			if (!program || !vertexShader) throw new Error('WebGL vertex shader creation failed')
+			gl.shaderSource(vertexShader, `
 			attribute vec2 attrVertex;
 			varying vec2 varyinTexCoordinate;
 			uniform vec2 uniformOffset;
@@ -176,37 +193,44 @@ export default async function getCanvasWebgl() {
 				gl_Position = vec4(attrVertex, 0, 1);
 			}
 		`)
-		gl.compileShader(vertexShader)
-		gl.attachShader(program, vertexShader)
+			gl.compileShader(vertexShader)
+			gl.attachShader(program, vertexShader)
 
-		// compile and attach fragment shader
-		const fragmentShader = gl.createShader(gl.FRAGMENT_SHADER)
-		gl.shaderSource(fragmentShader, `
+			// compile and attach fragment shader
+			fragmentShader = gl.createShader(gl.FRAGMENT_SHADER)
+			if (!fragmentShader) throw new Error('WebGL fragment shader creation failed')
+			gl.shaderSource(fragmentShader, `
 			precision mediump float;
 			varying vec2 varyinTexCoordinate;
 			void main() {
 				gl_FragColor = vec4(varyinTexCoordinate, 1, 1);
 			}
 		`)
-		gl.compileShader(fragmentShader)
-		gl.attachShader(program, fragmentShader)
+			gl.compileShader(fragmentShader)
+			gl.attachShader(program, fragmentShader)
 
-		// use program
-		const componentSize = 3
-		gl.linkProgram(program)
-		gl.useProgram(program)
-		program.vertexPosAttrib = gl.getAttribLocation(program, 'attrVertex')
-		program.offsetUniform = gl.getUniformLocation(program, 'uniformOffset')
-		gl.enableVertexAttribArray(program.vertexPosArray)
-		gl.vertexAttribPointer(program.vertexPosAttrib, componentSize, gl.FLOAT, false, 0, 0)
-		gl.uniform2f(program.offsetUniform, 1, 1)
+			// use program
+			const componentSize = 3
+			gl.linkProgram(program)
+			gl.useProgram(program)
+			const vertexPosAttrib = gl.getAttribLocation(program, 'attrVertex')
+			const offsetUniform = gl.getUniformLocation(program, 'uniformOffset')
+			gl.enableVertexAttribArray(vertexPosAttrib)
+			gl.vertexAttribPointer(vertexPosAttrib, componentSize, gl.FLOAT, false, 0, 0)
+			gl.uniform2f(offsetUniform, 1, 1)
 
-		// draw
-		const numOfIndices = 3
-		gl.drawArrays(gl.LINE_LOOP, 0, numOfIndices)
-		return gl
+			// draw
+			const numOfIndices = 3
+			gl.drawArrays(gl.LINE_LOOP, 0, numOfIndices)
+			return cleanup
+		} catch (error) {
+			cleanup()
+			throw error
+		}
 	}
 
+	let gl: WebGLContext | undefined
+	let gl2: WebGLContext | undefined
 	try {
 		const timer = createTimer()
 		await queueEvent(timer)
@@ -229,51 +253,64 @@ export default async function getCanvasWebgl() {
 		) || false
 
 		// create canvas context
-		let win = window
+		let win: Window = window
 		if (!LIKE_BRAVE && PHANTOM_DARKNESS) {
 			win = PHANTOM_DARKNESS
 		}
 		const doc = win.document
 
-		let canvas; let canvas2
-		if ('OffscreenCanvas' in window) {
-			// @ts-ignore OffscreenCanvas
-			canvas = new win.OffscreenCanvas(256, 256)
-			// @ts-ignore OffscreenCanvas
-			canvas2 = new win.OffscreenCanvas(256, 256)
-		} else {
-			canvas = doc.createElement('canvas')
-			canvas2 = doc.createElement('canvas')
-		}
-
-		const getContext = (canvas, contextType) => {
+		const isWebGLContext = (value: unknown): value is WebGLContext => (
+			value != null &&
+			typeof value == 'object' &&
+			typeof Reflect.get(value, 'getParameter') == 'function' &&
+			typeof Reflect.get(value, 'readPixels') == 'function'
+		)
+		const getContext = (canvas: WebGLCanvas, contextType: WebGLContextType): WebGLContext | undefined => {
 			try {
-				if (contextType == 'webgl2') {
-					return (
-						canvas.getContext('webgl2') ||
-						canvas.getContext('experimental-webgl2')
-					)
+				const contextIds = contextType == 'webgl2' ?
+					['webgl2', 'experimental-webgl2'] :
+					['webgl', 'experimental-webgl', 'moz-webgl', 'webkit-3d']
+				for (const contextId of contextIds) {
+					const context: unknown = Reflect.apply(canvas.getContext, canvas, [contextId])
+					if (isWebGLContext(context)) return context
 				}
-				return (
-					canvas.getContext('webgl') ||
-					canvas.getContext('experimental-webgl') ||
-					canvas.getContext('moz-webgl') ||
-					canvas.getContext('webkit-3d')
-				)
-			} catch (error) {
+				return undefined
+			} catch {
 				return
 			}
 		}
 
-		const gl = getContext(canvas, 'webgl')
-		const gl2 = getContext(canvas2, 'webgl2')
+		const createContext = (contextType: WebGLContextType) => {
+			const offscreenCanvasValue: unknown = Reflect.get(win, 'OffscreenCanvas')
+			const OffscreenCanvasCtor = typeof offscreenCanvasValue == 'function' ?
+				offscreenCanvasValue as typeof OffscreenCanvas : undefined
+			if (typeof OffscreenCanvasCtor == 'function') {
+				try {
+					const canvas = new OffscreenCanvasCtor(256, 256)
+					const context = getContext(canvas, contextType)
+					if (context) return { context, offscreen: true }
+				} catch {}
+			}
+			const canvas = doc.createElement('canvas')
+			canvas.width = canvas.height = 256
+			return { context: getContext(canvas, contextType), offscreen: false }
+		}
+
+		const context1 = createContext('webgl')
+		const context2 = createContext('webgl2')
+		gl = context1.context
+		gl2 = context2.context
 		if (!gl) {
 			logTestResult({ test: 'webgl', passed: false })
 			return
 		}
+		const primaryGl = gl
 
 		// helpers
-		const getShaderPrecisionFormat = (gl, shaderType) => {
+		const getShaderPrecisionFormat = (
+			gl: WebGLContext | undefined,
+			shaderType: 'VERTEX_SHADER' | 'FRAGMENT_SHADER',
+		) => {
 			if (!gl) {
 				return
 			}
@@ -289,11 +326,13 @@ export default async function getCanvasWebgl() {
 			}
 		}
 
-		const getShaderData = (name, shader) => {
-			const data = {}
-			// eslint-disable-next-line guard-for-in
-			for (const prop in shader) {
-				const obj = shader[prop]
+		const getShaderData = (
+			name: string,
+			shader: ReturnType<typeof getShaderPrecisionFormat>,
+		): Record<string, number | undefined> => {
+			const data: Record<string, number | undefined> = {}
+			if (!shader) return data
+			for (const [prop, obj] of Object.entries(shader)) {
 				data[name + '.' + prop + '.precision'] = obj ? attempt(() => obj.precision) : undefined
 				data[name + '.' + prop + '.rangeMax'] = obj ? attempt(() => obj.rangeMax) : undefined
 				data[name + '.' + prop + '.rangeMin'] = obj ? attempt(() => obj.rangeMin) : undefined
@@ -301,19 +340,28 @@ export default async function getCanvasWebgl() {
 			return data
 		}
 
-		const getMaxAnisotropy = (gl) => {
+		const getMaxAnisotropy = (gl?: WebGLContext): unknown => {
 			if (!gl) {
 				return
 			}
-			const ext = (
+			const ext: unknown = attempt(() => (
 				gl.getExtension('EXT_texture_filter_anisotropic') ||
 				gl.getExtension('MOZ_EXT_texture_filter_anisotropic') ||
 				gl.getExtension('WEBKIT_EXT_texture_filter_anisotropic')
-			)
-			return ext ? gl.getParameter(ext.MAX_TEXTURE_MAX_ANISOTROPY_EXT) : undefined
+			))
+			const maxAnisotropy = ext != null && (typeof ext == 'object' || typeof ext == 'function') ?
+				Reflect.get(ext, 'MAX_TEXTURE_MAX_ANISOTROPY_EXT') : undefined
+			return typeof maxAnisotropy == 'number' ?
+				attempt(() => gl.getParameter(maxAnisotropy)) : undefined
 		}
 
-		const getParams = (gl) => {
+		const serializeParameter = (value: unknown): unknown => {
+			if (!ArrayBuffer.isView(value) || value instanceof DataView) return value
+			const iterator: unknown = Reflect.get(value, Symbol.iterator)
+			return typeof iterator == 'function' ?
+				Array.from(value as ArrayBufferView & Iterable<unknown>) : value
+		}
+		const getParams = (gl?: WebGLContext): Record<string, unknown> => {
 			if (!gl) {
 				return {}
 			}
@@ -321,26 +369,26 @@ export default async function getCanvasWebgl() {
 			const pnames = Object.getOwnPropertyNames(Object.getPrototypeOf(gl))
 				// .filter(prop => prop.toUpperCase() == prop) // global test
 				.filter((name) => pnamesShortList.has(name))
-			return pnames.reduce((acc, name) => {
-				const val = gl.getParameter(gl[name])
-				if (!!val && 'buffer' in Object.getPrototypeOf(val)) {
-					acc[name] = [...val]
-				} else {
-					acc[name] = val
-				}
+			return pnames.reduce<Record<string, unknown>>((acc, name) => {
+				const parameter: unknown = Reflect.get(gl, name)
+				if (typeof parameter != 'number') return acc
+				const val: unknown = attempt(() => gl.getParameter(parameter), `WebGL parameter ${name} failed`)
+				acc[name] = serializeParameter(val)
 				return acc
 			}, {})
 		}
 
-		const getUnmasked = (gl) => {
-			const ext = !!gl ? gl.getExtension('WEBGL_debug_renderer_info') : null
+		const getUnmasked = (gl?: WebGLContext): Record<string, unknown> => {
+			if (!gl) return {}
+			const context = gl
+			const ext = attempt(() => context.getExtension('WEBGL_debug_renderer_info'))
 			return !ext ? {} : {
-				UNMASKED_VENDOR_WEBGL: gl.getParameter(ext.UNMASKED_VENDOR_WEBGL),
-				UNMASKED_RENDERER_WEBGL: gl.getParameter(ext.UNMASKED_RENDERER_WEBGL),
+				UNMASKED_VENDOR_WEBGL: attempt(() => context.getParameter(ext.UNMASKED_VENDOR_WEBGL)),
+				UNMASKED_RENDERER_WEBGL: attempt(() => context.getParameter(ext.UNMASKED_RENDERER_WEBGL)),
 			}
 		}
 
-		const getSupportedExtensions = (gl) => {
+		const getSupportedExtensions = (gl?: WebGLContext): string[] => {
 			if (!gl) {
 				return []
 			}
@@ -351,28 +399,45 @@ export default async function getCanvasWebgl() {
 			return ext
 		}
 
-		const getWebGLData = (gl, contextType) => {
+		interface WebGLData {
+			dataURI?: string
+			pixels?: number[]
+		}
+		const getWebGLData = (
+			gl: WebGLContext | undefined,
+			contextType: WebGLContextType,
+			offscreen: boolean,
+		): WebGLData | undefined => {
 			if (!gl) {
 				return {
 					dataURI: undefined,
 					pixels: undefined,
 				}
 			}
+			let cleanup: Cleanup | undefined
+			let dataContext: WebGLContext | undefined
+			let dataCleanup: Cleanup | undefined
 			try {
-				draw(gl)
+				cleanup = draw(gl)
 				const { drawingBufferWidth, drawingBufferHeight } = gl
-				let dataURI = ''
-				if (gl.canvas.constructor.name === 'OffscreenCanvas') {
-					const canvas = document.createElement('canvas')
-					draw(getContext(canvas, contextType))
-					dataURI = canvas.toDataURL()
+				let dataURI: string
+				if (offscreen) {
+					const dataCanvas = doc.createElement('canvas')
+					dataCanvas.width = dataCanvas.height = 256
+					dataContext = getContext(dataCanvas, contextType)
+					dataCleanup = draw(dataContext)
+					dataURI = dataCanvas.toDataURL()
 				} else {
-					dataURI = gl.canvas.toDataURL()
+					const toDataURL: unknown = Reflect.get(gl.canvas, 'toDataURL')
+					if (typeof toDataURL != 'function') throw new Error('WebGL canvas serialization unavailable')
+					const serialized: unknown = Reflect.apply(toDataURL, gl.canvas, [])
+					if (typeof serialized != 'string') throw new Error('WebGL canvas serialization failed')
+					dataURI = serialized
 				}
 
 				// reduce excessive reads to improve performance
-				const width = drawingBufferWidth/15
-				const height = drawingBufferHeight/6
+				const width = Math.max(1, Math.floor(drawingBufferWidth/15))
+				const height = Math.max(1, Math.floor(drawingBufferHeight/6))
 				const pixels = new Uint8Array(
 					width * height * 4,
 				)
@@ -386,7 +451,7 @@ export default async function getCanvasWebgl() {
 						gl.UNSIGNED_BYTE,
 						pixels,
 					)
-				} catch (error) {
+				} catch {
 					return {
 						dataURI,
 						pixels: undefined,
@@ -399,49 +464,55 @@ export default async function getCanvasWebgl() {
 				}
 			} catch (error) {
 				return captureError(error)
+			} finally {
+				cleanup?.()
+				dataCleanup?.()
+				try {
+					dataContext?.getExtension('WEBGL_lose_context')?.loseContext()
+				} catch {}
 			}
 		}
 
 		// get data
 		await queueEvent(timer)
-		const params = { ...getParams(gl), ...getUnmasked(gl) }
-		const params2 = { ...getParams(gl2), ...getUnmasked(gl2) }
+		const params: Record<string, unknown> = { ...getParams(gl), ...getUnmasked(gl) }
+		const params2: Record<string, unknown> = { ...getParams(gl2), ...getUnmasked(gl2) }
 		const VersionParam: Record<string, boolean> = {
 			ALIASED_LINE_WIDTH_RANGE: true,
 			SHADING_LANGUAGE_VERSION: true,
 			VERSION: true,
 		}
 		const mismatch = Object.keys(params2)
-			.filter((key) => !!params[key] && !VersionParam[key] && ('' + params[key] != '' + params2[key]))
+				.filter((key) => key in params && !VersionParam[key] && ('' + params[key] != '' + params2[key]))
 
 		if (mismatch.length) {
 			sendToTrash('webgl/webgl2 mirrored params mismatch', mismatch.toString())
 		}
 
 		await queueEvent(timer)
-		const { dataURI, pixels } = getWebGLData(gl, 'webgl') || {}
-		const { dataURI: dataURI2, pixels: pixels2 } = getWebGLData(gl2, 'webgl2') || {}
+		const { dataURI, pixels } = getWebGLData(gl, 'webgl', context1.offscreen) || {}
+		const { dataURI: dataURI2, pixels: pixels2 } = getWebGLData(gl2, 'webgl2', context2.offscreen) || {}
 
+		const parameters: Record<string, unknown> = {
+			...params,
+			...params2,
+			antialias: attempt(() => primaryGl.getContextAttributes()?.antialias),
+			MAX_VIEWPORT_DIMS: serializeParameter(attempt(() => primaryGl.getParameter(primaryGl.MAX_VIEWPORT_DIMS))),
+			MAX_TEXTURE_MAX_ANISOTROPY_EXT: getMaxAnisotropy(primaryGl),
+			...getShaderData('VERTEX_SHADER', getShaderPrecisionFormat(primaryGl, 'VERTEX_SHADER')),
+			...getShaderData('FRAGMENT_SHADER', getShaderPrecisionFormat(primaryGl, 'FRAGMENT_SHADER')),
+			MAX_DRAW_BUFFERS_WEBGL: attempt(() => {
+				const buffers = primaryGl.getExtension('WEBGL_draw_buffers')
+				return buffers ? primaryGl.getParameter(buffers.MAX_DRAW_BUFFERS_WEBGL) : undefined
+			}),
+		}
 		const data = {
-			extensions: [...getSupportedExtensions(gl), ...getSupportedExtensions(gl2)],
+				extensions: [...new Set([...getSupportedExtensions(gl), ...getSupportedExtensions(gl2)])].sort(),
 			pixels,
 			pixels2,
 			dataURI,
 			dataURI2,
-			parameters: {
-				...{ ...params, ...params2 },
-				...{
-					antialias: gl.getContextAttributes() ? gl.getContextAttributes().antialias : undefined,
-					MAX_VIEWPORT_DIMS: attempt(() => [...gl.getParameter(gl.MAX_VIEWPORT_DIMS)]),
-					MAX_TEXTURE_MAX_ANISOTROPY_EXT: getMaxAnisotropy(gl),
-					...getShaderData('VERTEX_SHADER', getShaderPrecisionFormat(gl, 'VERTEX_SHADER')),
-					...getShaderData('FRAGMENT_SHADER', getShaderPrecisionFormat(gl, 'FRAGMENT_SHADER')),
-					MAX_DRAW_BUFFERS_WEBGL: attempt(() => {
-						const buffers = gl.getExtension('WEBGL_draw_buffers')
-						return buffers ? gl.getParameter(buffers.MAX_DRAW_BUFFERS_WEBGL) : undefined
-					}),
-				},
-			},
+			parameters,
 			parameterOrExtensionLie,
 			lied,
 		}
@@ -457,7 +528,8 @@ export default async function getCanvasWebgl() {
 				.map((val) => Number(val))),
 		].sort((a, b) => (a - b))
 
-		const gpuBrand = getGpuBrand(data.parameters?.UNMASKED_RENDERER_WEBGL)
+		const unmaskedRenderer = data.parameters.UNMASKED_RENDERER_WEBGL
+		const gpuBrand = getGpuBrand(typeof unmaskedRenderer == 'string' ? unmaskedRenderer : '')
 		const webglParamsStr = ''+webglParams
 		const webglBrandCapabilities = !gpuBrand || !webglParamsStr ? undefined : hashMini([gpuBrand, webglParamsStr])
 		const webglCapabilities = !webglParams ? undefined : webglParams.reduce((acc, val, i) => acc ^ (+val + i), 0)
@@ -478,16 +550,23 @@ export default async function getCanvasWebgl() {
 		}
 
 		logTestResult({ time: timer.stop(), test: 'webgl', passed: true })
-		return {
+		const result = {
 			...data,
 			gpu: {
-				...(getWebGLRendererConfidence((data.parameters||{}).UNMASKED_RENDERER_WEBGL) || {}),
+					...getWebGLRendererConfidence((data.parameters||{}).UNMASKED_RENDERER_WEBGL),
 				compressedGPU: compressWebGLRenderer((data.parameters||{}).UNMASKED_RENDERER_WEBGL),
 			},
 		}
+		return result
 	} catch (error) {
 		logTestResult({ test: 'webgl', passed: false })
 		captureError(error)
-		return
+		throw error
+	} finally {
+		;[gl, gl2].forEach((context) => {
+			try {
+				context?.getExtension('WEBGL_lose_context')?.loseContext()
+			} catch {}
+		})
 	}
 }

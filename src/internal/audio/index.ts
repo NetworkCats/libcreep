@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { attempt, caniuse, captureError } from '../errors'
 import { lieProps, documentLie } from '../lies'
 import { sendToTrash } from '../trash'
@@ -56,39 +55,75 @@ export const KnownAudio: Record<string, number[]> = {
 
 const AUDIO_TRAP = Math.random()
 
+const getAbortReason = (signal?: AbortSignal) => (
+	signal?.reason ?? new DOMException('Audio detection was aborted.', 'AbortError')
+)
+
 const throwIfAborted = (signal?: AbortSignal) => {
 	if (!signal?.aborted) return
-	throw signal.reason || new DOMException('Audio detection was aborted.', 'AbortError')
+	throw getAbortReason(signal)
 }
 
-async function hasFakeAudio(signal?: AbortSignal) {
+async function hasFakeAudio(
+	OfflineAudioContextCtor: typeof OfflineAudioContext,
+	signal?: AbortSignal,
+): Promise<boolean> {
 	throwIfAborted(signal)
-	const context = new OfflineAudioContext(1, 100, 44100)
+	const context = new OfflineAudioContextCtor(1, 100, 44100)
 	const oscillator = context.createOscillator()
 	oscillator.frequency.value = 0
 	oscillator.start(0)
 
-	return new Promise((resolve, reject) => {
+	return new Promise<boolean>((resolve, reject) => {
 		let settled = false
-		const finish = (value, error) => {
+		let timeout: ReturnType<typeof setTimeout> | undefined
+		const finish = (value: boolean | undefined, error?: unknown, rejected = false) => {
 			if (settled) return
 			settled = true
+			clearTimeout(timeout)
 			signal?.removeEventListener('abort', abort)
-			oscillator.disconnect()
-			return error ? reject(error) : resolve(value)
-		}
-		const abort = () => {
+			if (rejected) {
+				try {
+					void context.suspend?.(0)?.catch(() => undefined)
+				} catch {}
+			}
 			try {
-				void context.suspend?.(0)?.catch(() => undefined)
-			} catch (error) { }
-			return finish(undefined, signal.reason || new DOMException('Audio detection was aborted.', 'AbortError'))
+				context.oncomplete = null
+				oscillator.disconnect()
+			} catch {
+				// Cleanup failures must not leave the detector promise pending.
+			}
+			return rejected ? reject(error) : resolve(value ?? false)
 		}
+		const abort = () => finish(undefined, getAbortReason(signal), true)
 		signal?.addEventListener('abort', abort, { once: true })
-		context.oncomplete = (event) => {
-			const channelData = event.renderedBuffer.getChannelData?.(0)
-			return finish(channelData ? ''+[...new Set(channelData)] !== '0' : false)
+		if (signal?.aborted) return abort()
+		const complete = (buffer: AudioBuffer) => {
+			if (settled) return
+			try {
+				const channelData = buffer.getChannelData?.(0)
+				return finish(channelData ? ''+[...new Set(channelData)] !== '0' : false)
+			} catch (error) {
+				return finish(undefined, error, true)
+			}
 		}
-		void context.startRendering().catch((error) => finish(undefined, error))
+		context.oncomplete = (event: OfflineAudioCompletionEvent) => complete(event.renderedBuffer)
+		try {
+			timeout = setTimeout(() => finish(
+				undefined,
+				new DOMException('Offline audio validation timed out.', 'TimeoutError'),
+				true,
+			), 5000)
+			const rendering = context.startRendering()
+			void Promise.resolve(rendering).then(
+				(buffer) => {
+					if (buffer) complete(buffer)
+				},
+				(error) => finish(undefined, error, true),
+			)
+		} catch (error) {
+			finish(undefined, error, true)
+		}
 	})
 }
 
@@ -98,12 +133,14 @@ export default async function getOfflineAudioContext(signal?: AbortSignal) {
 		const timer = createTimer()
 		await queueEvent(timer)
 		throwIfAborted(signal)
-		try {
-			// @ts-expect-error if unsupported
-			window.OfflineAudioContext = OfflineAudioContext || webkitOfflineAudioContext
-		} catch (err) { }
+		const legacyOfflineAudioContext: unknown = Reflect.get(window, 'webkitOfflineAudioContext')
+		const OfflineAudioContextCtor: typeof OfflineAudioContext | undefined = (
+			typeof window.OfflineAudioContext == 'function' ? window.OfflineAudioContext :
+				typeof legacyOfflineAudioContext == 'function' ?
+					legacyOfflineAudioContext as typeof OfflineAudioContext : undefined
+		)
 
-		if (!window.OfflineAudioContext) {
+		if (typeof OfflineAudioContextCtor != 'function') {
 			logTestResult({test: 'audio', passed: false})
 			return
 		}
@@ -114,7 +151,7 @@ export default async function getOfflineAudioContext(signal?: AbortSignal) {
 		let lied = (channelDataLie || copyFromChannelLie) || false
 
 		const bufferLen = 5000
-		const context = new OfflineAudioContext(1, bufferLen, 44100)
+		const context = new OfflineAudioContextCtor(1, bufferLen, 44100)
 		const analyser = context.createAnalyser()
 		const oscillator = context.createOscillator()
 		const dynamicsCompressor = context.createDynamicsCompressor()
@@ -168,27 +205,62 @@ export default async function getOfflineAudioContext(signal?: AbortSignal) {
 			floatFrequencyData: Float32Array
 			floatTimeDomainData: Float32Array
 			buffer: AudioBuffer
-			compressorGainReduction: number
+			compressorGainReduction?: number
 		}
-		const getRenderedBuffer = (context: OfflineAudioContext): Promise<AudioData | null> => (new Promise((resolve, reject) => {
+			const getRenderedBuffer = (context: OfflineAudioContext): Promise<AudioData> => (new Promise((resolve, reject) => {
 			const analyser = context.createAnalyser()
 			const oscillator = context.createOscillator()
 			const dynamicsCompressor = context.createDynamicsCompressor()
-			let settled = false
-			const finish = (value, error) => {
-				if (settled) return
-				settled = true
-				signal?.removeEventListener('abort', abort)
-				dynamicsCompressor.disconnect()
-				oscillator.disconnect()
-				return error ? reject(error) : resolve(value)
-			}
-			const abort = () => {
+				let settled = false
+				let timeout: ReturnType<typeof setTimeout> | undefined
+				const finish = (value: AudioData | undefined, error?: unknown, rejected = false) => {
+					if (settled) return
+					settled = true
+					clearTimeout(timeout)
+					signal?.removeEventListener('abort', abort)
+					if (rejected) {
+						try {
+							void context.suspend?.(0)?.catch(() => undefined)
+						} catch {}
+					}
 				try {
-					void context.suspend?.(0)?.catch(() => undefined)
-				} catch (error) { }
-				return finish(undefined, signal.reason || new DOMException('Audio detection was aborted.', 'AbortError'))
+					context.removeEventListener('complete', completeEvent)
+					dynamicsCompressor.disconnect()
+					oscillator.disconnect()
+				} catch {
+					// Cleanup failures must not leave the detector promise pending.
+				}
+				if (rejected) return reject(error)
+				if (!value) return reject(new Error('Offline audio rendering returned no data'))
+				return resolve(value)
 			}
+				const abort = () => finish(undefined, getAbortReason(signal), true)
+				const complete = (buffer: AudioBuffer) => {
+					if (settled) return
+					try {
+					const floatFrequencyData = new Float32Array(analyser.frequencyBinCount)
+					analyser.getFloatFrequencyData?.(floatFrequencyData)
+					const floatTimeDomainData = new Float32Array(analyser.fftSize)
+					if ('getFloatTimeDomainData' in analyser) {
+						analyser.getFloatTimeDomainData(floatTimeDomainData)
+					}
+					const reduction: unknown = Reflect.get(dynamicsCompressor, 'reduction')
+					const legacyReduction = reduction != null &&
+						(typeof reduction == 'object' || typeof reduction == 'function') ?
+						Reflect.get(reduction, 'value') : undefined
+
+						return finish({
+						floatFrequencyData,
+						floatTimeDomainData,
+							buffer,
+						compressorGainReduction: typeof reduction == 'number' ? reduction :
+							typeof legacyReduction == 'number' ? legacyReduction : undefined,
+					})
+				} catch (error) {
+					return finish(undefined, error, true)
+					}
+				}
+				const completeEvent = (event: OfflineAudioCompletionEvent) => complete(event.renderedBuffer)
 
 			try {
 				oscillator.type = 'triangle'
@@ -196,40 +268,32 @@ export default async function getOfflineAudioContext(signal?: AbortSignal) {
 				dynamicsCompressor.threshold.value = -50
 				dynamicsCompressor.knee.value = 40
 				dynamicsCompressor.attack.value = 0
-			} catch (err) {}
+			} catch {}
 
-			oscillator.connect(dynamicsCompressor)
-			dynamicsCompressor.connect(analyser)
-			dynamicsCompressor.connect(context.destination)
+			try {
+				oscillator.connect(dynamicsCompressor)
+				dynamicsCompressor.connect(analyser)
+				dynamicsCompressor.connect(context.destination)
 
-			oscillator.start(0)
-			signal?.addEventListener('abort', abort, { once: true })
-			if (signal?.aborted) return abort()
-			void context.startRendering().catch((error) => finish(undefined, error))
-
-			return context.addEventListener('complete', (event) => {
-				try {
-					const floatFrequencyData = new Float32Array(analyser.frequencyBinCount)
-					analyser.getFloatFrequencyData?.(floatFrequencyData)
-					const floatTimeDomainData = new Float32Array(analyser.fftSize)
-					if ('getFloatTimeDomainData' in analyser) {
-						analyser.getFloatTimeDomainData(floatTimeDomainData)
-					}
-
-					return finish({
-						floatFrequencyData,
-						floatTimeDomainData,
-						buffer: event.renderedBuffer,
-						compressorGainReduction: (
-							// @ts-expect-error if unsupported
-							dynamicsCompressor.reduction.value || // webkit
-							dynamicsCompressor.reduction
-						),
-					})
-				} catch (error) {
-					return finish(null)
-				}
-			})
+				oscillator.start(0)
+				signal?.addEventListener('abort', abort, { once: true })
+				if (signal?.aborted) return abort()
+					context.addEventListener('complete', completeEvent)
+					timeout = setTimeout(() => finish(
+						undefined,
+						new DOMException('Offline audio rendering timed out.', 'TimeoutError'),
+						true,
+					), 5000)
+					const rendering = context.startRendering()
+					void Promise.resolve(rendering).then(
+						(buffer) => {
+							if (buffer) complete(buffer)
+						},
+						(error) => finish(undefined, error, true),
+					)
+			} catch (error) {
+				return finish(undefined, error, true)
+			}
 		}))
 		await queueEvent(timer)
 		throwIfAborted(signal)
@@ -237,8 +301,8 @@ export default async function getOfflineAudioContext(signal?: AbortSignal) {
 			audioData,
 			audioIsFake,
 		] = await Promise.all([
-			getRenderedBuffer(new OfflineAudioContext(1, bufferLen, 44100)),
-			hasFakeAudio(signal).catch((error) => {
+			getRenderedBuffer(new OfflineAudioContextCtor(1, bufferLen, 44100)),
+			hasFakeAudio(OfflineAudioContextCtor, signal).catch((error) => {
 				if (signal?.aborted) throw error
 				return false
 			}),
@@ -254,15 +318,15 @@ export default async function getOfflineAudioContext(signal?: AbortSignal) {
 
 		await queueEvent(timer)
 		throwIfAborted(signal)
-		const getSnapshot = (arr: number[], start: number, end: number) => {
-			const collection = []
+		const getSnapshot = (arr: number[], start: number, end: number): (number | undefined)[] => {
+			const collection: (number | undefined)[] = []
 			for (let i = start; i < end; i++) {
 				collection.push(arr[i])
 			}
 			return collection
 		}
-		const getSum = (arr?: Float32Array | number[]) => !arr ? 0 : [...arr]
-			.reduce((acc, curr) => (acc += Math.abs(curr)), 0)
+		const getSum = (arr?: Iterable<number | undefined>) => !arr ? 0 : [...arr]
+			.reduce<number>((acc, curr) => (acc += Math.abs(curr ?? Number.NaN)), 0)
 		const floatFrequencyDataSum = getSum(floatFrequencyData)
 		const floatTimeDomainDataSum = getSum(floatTimeDomainData)
 
@@ -284,7 +348,7 @@ export default async function getOfflineAudioContext(signal?: AbortSignal) {
 
 		// sample matching
 		const matching = '' + binsSample == '' + copySample
-		const copyFromChannelSupported = ('copyFromChannel' in AudioBuffer.prototype)
+		const copyFromChannelSupported = typeof buffer?.copyFromChannel == 'function'
 		if (copyFromChannelSupported && !matching) {
 			lied = true
 			const audioSampleLie = 'getChannelData and copyFromChannel samples mismatch'
@@ -292,7 +356,7 @@ export default async function getOfflineAudioContext(signal?: AbortSignal) {
 		}
 
 		// sample uniqueness
-		const totalUniqueSamples = new Set([...bins]).size
+		const totalUniqueSamples = new Set(bins).size
 		if (totalUniqueSamples == bufferLen) {
 			const audioUniquenessTrash = `${totalUniqueSamples} unique samples of ${bufferLen} is too high`
 			sendToTrash('AudioBuffer', audioUniquenessTrash)
@@ -300,7 +364,7 @@ export default async function getOfflineAudioContext(signal?: AbortSignal) {
 
 		// sample noise factor
 		const getRandFromRange = (min: number, max: number) => Math.floor(Math.random() * (max - min + 1)) + min
-		const getCopyFrom = (rand: number, buffer: AudioBuffer, copy: Float32Array) => {
+		const getCopyFrom = (rand: number, buffer: AudioBuffer, copy: Float32Array<ArrayBuffer>) => {
 			const {length} = buffer
 
 			const max = 20;
@@ -320,7 +384,7 @@ export default async function getOfflineAudioContext(signal?: AbortSignal) {
 			return [...new Set([...buffer.getChannelData(0), ...copy, ...attack])].filter((x) => x !== 0)
 		}
 
-		const getCopyTo = (rand: number, buffer: AudioBuffer, copy: Float32Array) => {
+		const getCopyTo = (rand: number, buffer: AudioBuffer, copy: Float32Array<ArrayBuffer>) => {
 			buffer.copyToChannel(copy.map(() => rand), 0)
 			const frequency = buffer.getChannelData(0)[0]
 			const dataAttacked = [...buffer.getChannelData(0)]
@@ -488,11 +552,9 @@ export default async function getOfflineAudioContext(signal?: AbortSignal) {
 			lied,
 		}
 	} catch (error) {
-		if (signal?.aborted) throw error
+		if (signal?.aborted) throwIfAborted(signal)
 		logTestResult({test: 'audio', passed: false})
 		captureError(error, 'OfflineAudioContext failed or blocked by client')
-		return
+		throw error
 	}
 }
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any

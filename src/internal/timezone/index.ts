@@ -1,8 +1,11 @@
-// @ts-nocheck
 import { captureError } from '../errors'
 import { lieProps } from '../lies'
 import { hashMini } from '../utils/crypto'
 import { createTimer, logTestResult } from '../utils/helpers'
+
+export const formatTimezoneLocation = (value?: string): string | undefined =>
+	value?.replace(/_/g, ' ').split('/').join(', ')
+
 export default function getTimezone() {
 	// inspired by https://arkenfox.github.io/TZP
 	// https://github.com/vvo/tzdb/blob/master/time-zones-names.json
@@ -466,98 +469,97 @@ export default function getTimezone() {
 	]
 
 	const getTimezoneOffset = () => {
-		const [year, month, day] = JSON.stringify(new Date())
-			.slice(1, 11)
-			.split('-')
-		const dateString = `${month}/${day}/${year}`
-		const dateStringUTC = `${year}-${month}-${day}`
-		const now = +new Date(dateString)
-		const utc = +new Date(dateStringUTC)
-		const offset = +((now - utc)/60000)
+		const date = new Date()
+		const year = date.getFullYear()
+		const month = date.getMonth()
+		const day = date.getDate()
+		const localMidnight = +new Date(year, month, day)
+		const utcMidnight = Date.UTC(year, month, day)
+		const offset = (localMidnight - utcMidnight) / 60000
 		return ~~offset
 	}
 
-	const getTimezoneOffsetHistory = ({ year, city = null }) => {
-		const format = {
-			timeZone: '',
-			year: 'numeric',
-			month: 'numeric',
-			day: 'numeric',
-			hour: 'numeric',
-			minute: 'numeric',
-			second: 'numeric',
+	const getTimezoneOffsetHistory = ({
+		year,
+		city = null,
+	}: {
+		year: number
+		city?: string | null
+	}): number | undefined => {
+		const instant = Date.UTC(year, 6, 1, 12)
+		if (!city) {
+			return -new Date(year, 6, 1, 12).getTimezoneOffset()
 		}
-		const minute = 60000
-		let formatter; let summer
-		if (city) {
-			const options = {
-				...format,
+		try {
+			const formatter = new Intl.DateTimeFormat('en-US-u-ca-gregory-nu-latn', {
 				timeZone: city,
-			}
-			// @ts-ignore
-			formatter = new Intl.DateTimeFormat('en', options)
-			summer = +new Date(formatter.format(new Date(`7/1/${year}`)))
-		} else {
-			summer = +new Date(`7/1/${year}`)
+				year: 'numeric',
+				month: 'numeric',
+				day: 'numeric',
+				hour: 'numeric',
+				minute: 'numeric',
+				second: 'numeric',
+				hourCycle: 'h23',
+			})
+			const parts = formatter
+				.formatToParts(new Date(instant))
+				.reduce<Partial<Record<Intl.DateTimeFormatPartTypes, number>>>((acc, part) => {
+					if (part.type != 'literal') acc[part.type] = +part.value
+					return acc
+				}, {})
+			const { year: partYear, month, day, hour, minute, second } = parts
+			if (
+				partYear === undefined ||
+				month === undefined ||
+				day === undefined ||
+				hour === undefined ||
+				minute === undefined ||
+				second === undefined
+			)
+				return undefined
+			const wallClockAsUTC = Date.UTC(partYear, month - 1, day, hour, minute, second)
+			return (wallClockAsUTC - instant) / 60000
+		} catch {
+			return undefined
 		}
-		const summerUTCTime = +new Date(`${year}-07-01`)
-		const offset = (summer - summerUTCTime) / minute
-		return offset
 	}
 
-	const binarySearch = (list, fn) => {
-		const end = list.length
-		const middle = Math.floor(end / 2)
-		const [left, right] = [list.slice(0, middle), list.slice(middle, end)]
-		const found = fn(left)
-		return end == 1 || found.length ? found : binarySearch(right, fn)
-	}
-
-	const decryptLocation = ({ year, timeZone }) => {
+	const decryptLocation = ({ year, timeZone }: { year: number; timeZone?: string }): string | undefined => {
+		if (!timeZone) return timeZone
 		const system = getTimezoneOffsetHistory({ year })
 		const resolvedOptions = getTimezoneOffsetHistory({ year, city: timeZone })
-		const filter = (cities) => cities
-			.filter((city) => system == getTimezoneOffsetHistory({ year, city }))
+		const filter = (cityList: readonly string[]) =>
+			cityList.filter((city) => system == getTimezoneOffsetHistory({ year, city }))
 
 		// get city region set
-		const decryption = (
-			system == resolvedOptions ? [timeZone] : binarySearch(cities, filter)
-		)
+		const decryption = system == resolvedOptions ? [timeZone] : filter(cities)
+		if (!decryption.length) return timeZone
 
 		// reduce set to one city
-		const decrypted = (
-			decryption.length == 1 && decryption[0] == timeZone ? timeZone : hashMini(decryption)
-		)
+		const decrypted = decryption.length == 1 && decryption[0] == timeZone ? timeZone : hashMini(decryption)
 		return decrypted
-	}
-
-	const formatLocation = (x) => {
-		try {
-			return x.replace(/_/, ' ').split('/').join(', ')
-		} catch (error) {}
-		return x
 	}
 
 	try {
 		const timer = createTimer()
 		timer.start()
 
-		const lied = (
+		const lied =
 			lieProps['Date.getTimezoneOffset'] ||
 			lieProps['Intl.DateTimeFormat.resolvedOptions'] ||
-			lieProps['Intl.RelativeTimeFormat.resolvedOptions']
-		) || false
+			lieProps['Intl.RelativeTimeFormat.resolvedOptions'] ||
+			false
 
 		const year = 1113
 		// eslint-disable-next-line new-cap
 		const { timeZone } = Intl.DateTimeFormat().resolvedOptions()
 		const decrypted = decryptLocation({ year, timeZone })
-		const locationEpoch = +new Date(new Date(`7/1/${year}`))
+		const locationEpoch = +new Date(year, 6, 1)
 		const notWithinParentheses = /.*\(|\).*/g
 		const data = {
-			zone: (''+new Date()).replace(notWithinParentheses, ''),
-			location: formatLocation(timeZone),
-			locationMeasured: formatLocation(decrypted),
+			zone: ('' + new Date()).replace(notWithinParentheses, ''),
+			location: formatTimezoneLocation(timeZone),
+			locationMeasured: formatTimezoneLocation(decrypted),
 			locationEpoch,
 			offset: new Date().getTimezoneOffset(),
 			offsetComputed: getTimezoneOffset(),
@@ -568,6 +570,6 @@ export default function getTimezone() {
 	} catch (error) {
 		logTestResult({ test: 'timezone', passed: false })
 		captureError(error)
-		return
+		throw error
 	}
 }

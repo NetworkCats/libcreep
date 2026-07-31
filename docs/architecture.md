@@ -8,10 +8,10 @@ in a browser, verifies `TextEncoder` and Web Crypto SHA-256, and waits for
 `document.body`.
 
 The package is ESM-only and targets ES2022. Its built output has a public API
-entry, a dynamically loaded detector runtime, a module-worker entry, and
-supporting chunks. The default worker URL is resolved next to the public entry.
-A custom `worker.url` is needed only when build tooling or a CDN moves the
-worker; relocating it also requires deploying the chunks it imports.
+entry, a dynamically loaded detector runtime, and a self-contained
+module-worker asset. Its static package-relative URL can be copied and
+rewritten by downstream bundlers. A custom `worker.url` is needed only when
+build tooling or a CDN moves the worker.
 
 The `src/internal` modules retain the detector algorithms by signal family.
 The reusable orchestration, cancellation, public hashing, versioning, and
@@ -31,10 +31,10 @@ different collectors, and the one-shot `collect()` API therefore execute one
 at a time. Serialization protects temporary detector DOM and mutable upstream
 records from overlapping runs.
 
-A queued call with an aborted signal is rejected and removed before its runtime
-work starts. `timeoutMs` is created inside the active runtime, so it measures
-only the call's own collection and not its queue wait. `result.durationMs` has
-the same active-only boundary.
+A queued call whose signal is aborted or whose deadline expires rejects without
+starting detector work. `timeoutMs` begins at the public call, so it covers
+one-shot loading, document readiness, the queue wait, and active collection.
+`result.durationMs` still measures active detector collection only.
 
 ## Collection lifecycle
 
@@ -51,10 +51,10 @@ the same active-only boundary.
 6. Headless and engine-feature probes run concurrently after their required
    inputs are available.
 7. Lie, anomaly (`trash`), and captured-error records are finalized.
-8. Successful core values receive component `$hash` fields, and focused hashes
-   are calculated from the available raw values.
-9. Trust and stability rules build `stableComponents`; auxiliary results are
-   snapshotted.
+8. Successful core values receive canonical component `$hash` fields, and
+   focused hashes are calculated canonically from usable raw values.
+9. Trust and stability rules build an independently snapshotted
+   `stableComponents`; auxiliary results are also snapshotted.
 10. Raw, stable, fuzzy, and bot outputs are calculated and the structured
     result is returned.
 11. Cancellation listeners/timers and temporary phantom DOM are removed in a
@@ -83,8 +83,8 @@ runs.
 
 ## Component hashes and the raw identifier
 
-Each fulfilled core value includes a `$hash` based on its upstream component
-data. A few components preserve upstream-specific hash targets: for example,
+Each fulfilled core value includes a canonical `$hash` based on its component
+data. A few components preserve upstream-specific targets: for example,
 the HTML component hashes its property keys, math hashes its data record, and
 console errors hash their error list. WebGL pixel arrays are replaced with
 their own hashes in the public component value.
@@ -92,10 +92,15 @@ their own hashes in the public component value.
 `rawVisitorId` uses the public canonical `hashComponents()` format over the
 entire core result map:
 
-- component and plain-object keys are sorted;
+- component and plain-object keys are sorted by locale-independent UTF-16 code
+  units;
 - fulfilled component values are included;
 - `unsupported`, `rejected`, and `skipped` remain distinct statuses;
 - detector durations and rejected error details are excluded.
+
+Canonical tags preserve `undefined`, bigint, non-finite numbers, negative zero,
+`Error`, and sparse-array holes. Plain objects that use the reserved `$type`
+key are escaped so user data cannot collide with those tags.
 
 The raw identifier therefore reacts to high-entropy and potentially unstable
 data, but not timing noise or browser-specific error wording. Auxiliary probes
@@ -148,9 +153,9 @@ hash or stable visitor identifier.
 
 The bot mask is an eight-rule ordered bitset. Six rules use client-side data;
 the excessive-loose-fingerprint and low-crowd-blending rules remain `0` because
-they require server history or crowd analysis. Dedicated or unavailable worker
-scope is one of the client-side heuristics, so applications must treat the bot
-output as a signal rather than a verdict.
+they require server history or crowd analysis. An unavailable worker scope is
+one of the client-side heuristics, so applications must treat the bot output as
+a signal rather than a verdict.
 
 ## State ownership
 
@@ -158,7 +163,8 @@ Several adapted upstream detectors record lies, captured errors, anomalies,
 and lower-entropy findings in module-level objects. The runtime snapshots an
 initial baseline and resets these records before every collection. Returned
 successful values are cloned before result assembly so later collections do
-not mutate earlier results.
+not mutate earlier results. The stable projection is cloned again before it is
+hashed and returned, keeping it independent from the raw-value projection.
 
 This reset-plus-serialization model is what makes repeated collection safe
 without rewriting every upstream detector around isolated state containers.

@@ -12,30 +12,183 @@ function stringifySafely(value: unknown): string {
   }
 }
 
-function normalizeError(error: unknown): ComponentError {
-  if (error instanceof Error) {
-    return {
-      message: error.message,
-      name: error.name,
-      ...(error.stack === undefined ? {} : { stack: error.stack }),
-    };
+interface PropertyRead {
+  readonly succeeded: boolean;
+  readonly value?: unknown;
+}
+
+function readPropertySafely(value: object, key: PropertyKey): PropertyRead {
+  try {
+    return { succeeded: true, value: Reflect.get(value, key) };
+  } catch {
+    return { succeeded: false };
   }
+}
+
+const BUILTIN_ERROR_CONSTRUCTOR_SOURCES = new Set(
+  [
+    Error,
+    EvalError,
+    RangeError,
+    ReferenceError,
+    SyntaxError,
+    TypeError,
+    URIError,
+  ]
+    .map((constructor) => {
+      try {
+        return Function.prototype.toString.call(constructor);
+      } catch {
+        return undefined;
+      }
+    })
+    .filter((source): source is string => source !== undefined),
+);
+
+const DOM_EXCEPTION_NAME_GETTER = (() => {
+  try {
+    return typeof DOMException === 'function'
+      ? Object.getOwnPropertyDescriptor(DOMException.prototype, 'name')?.get
+      : undefined;
+  } catch {
+    return undefined;
+  }
+})();
+
+function hasBuiltinErrorPrototype(value: object): boolean {
+  const visited = new Set<object>();
+  let current: object | null = value;
+  try {
+    while (current !== null && !visited.has(current)) {
+      visited.add(current);
+      const constructor = Object.getOwnPropertyDescriptor(
+        current,
+        'constructor',
+      );
+      if (
+        constructor !== undefined &&
+        'value' in constructor &&
+        typeof constructor.value === 'function' &&
+        BUILTIN_ERROR_CONSTRUCTOR_SOURCES.has(
+          Function.prototype.toString.call(constructor.value),
+        )
+      ) {
+        return true;
+      }
+      current = Object.getPrototypeOf(current) as object | null;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+function hasToStringTagInPrototypeChain(value: object): boolean {
+  const visited = new Set<object>();
+  let current: object | null = value;
+  try {
+    while (current !== null && !visited.has(current)) {
+      visited.add(current);
+      if (
+        Object.getOwnPropertyDescriptor(current, Symbol.toStringTag) !==
+        undefined
+      ) {
+        return true;
+      }
+      current = Object.getPrototypeOf(current) as object | null;
+    }
+  } catch {
+    return true;
+  }
+  return false;
+}
+
+function isErrorObject(value: unknown): value is object {
+  if (value === null || typeof value !== 'object') return false;
+  if (DOM_EXCEPTION_NAME_GETTER !== undefined) {
+    try {
+      DOM_EXCEPTION_NAME_GETTER.call(value);
+      return true;
+    } catch {
+      // It is not a platform DOMException with the required internal slots.
+    }
+  }
+  if (hasToStringTagInPrototypeChain(value)) return false;
+  try {
+    return (
+      Object.prototype.toString.call(value) === '[object Error]' &&
+      hasBuiltinErrorPrototype(value)
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** @internal Normalizes thrown values without trusting their property getters. */
+export function normalizeError(error: unknown): ComponentError {
   if (error !== null && typeof error === 'object') {
-    const value = error as Partial<ComponentError>;
+    const recognizedError = isErrorObject(error);
+    const message = readPropertySafely(error, 'message');
+    const name = readPropertySafely(error, 'name');
+    const stack = readPropertySafely(error, 'stack');
     return {
-      message: stringifySafely(value.message ?? error),
-      name: stringifySafely(value.name ?? 'Error'),
-      ...(value.stack === undefined
+      message:
+        message.succeeded && message.value !== undefined
+          ? stringifySafely(message.value)
+          : recognizedError
+            ? 'Unknown error'
+            : stringifySafely(error),
+      name:
+        name.succeeded && name.value !== undefined
+          ? stringifySafely(name.value)
+          : 'Error',
+      ...(!stack.succeeded || stack.value === undefined
         ? {}
-        : { stack: stringifySafely(value.stack) }),
+        : { stack: stringifySafely(stack.value) }),
     };
   }
   return { message: stringifySafely(error), name: 'Error' };
 }
 
+function compareCodeUnits(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function isPlainObject(value: object): boolean {
+  let prototype: object | null;
+  try {
+    prototype = Object.getPrototypeOf(value) as object | null;
+  } catch {
+    return false;
+  }
+  if (prototype === null || prototype === Object.prototype) return true;
+
+  let constructor: PropertyDescriptor | undefined;
+  try {
+    constructor = Object.getOwnPropertyDescriptor(prototype, 'constructor');
+  } catch {
+    return false;
+  }
+  if (
+    constructor === undefined ||
+    !('value' in constructor) ||
+    typeof constructor.value !== 'function'
+  ) {
+    return false;
+  }
+  try {
+    return (
+      constructor.value.prototype === prototype &&
+      Function.prototype.toString.call(constructor.value) ===
+        Function.prototype.toString.call(Object)
+    );
+  } catch {
+    return false;
+  }
+}
+
 function getPlainObjectEntries(value: object): Array<[string, unknown]> {
-  const prototype = Object.getPrototypeOf(value) as object | null;
-  if (prototype !== null && prototype !== Object.prototype) {
+  if (!isPlainObject(value)) {
     throw new TypeError('Cannot hash non-plain object values.');
   }
   if (Object.getOwnPropertySymbols(value).length > 0) {
@@ -43,7 +196,7 @@ function getPlainObjectEntries(value: object): Array<[string, unknown]> {
   }
 
   return Object.entries(Object.getOwnPropertyDescriptors(value))
-    .sort(([left], [right]) => left.localeCompare(right))
+    .sort(([left], [right]) => compareCodeUnits(left, right))
     .map(([key, descriptor]) => {
       if (!descriptor.enumerable) {
         throw new TypeError('Cannot hash non-enumerable properties.');
@@ -81,9 +234,12 @@ function canonicalizeArray(
       throw new TypeError('Cannot hash accessor properties.');
     }
   }
-  return Array.from({ length: value.length }, (_, index) =>
-    canonicalize(descriptors[index]?.value, ancestors),
-  );
+  return Array.from({ length: value.length }, (_, index) => {
+    const descriptor = descriptors[index];
+    return descriptor === undefined
+      ? { $type: 'array-hole' }
+      : canonicalize(descriptor.value, ancestors);
+  });
 }
 
 function canonicalize(
@@ -106,8 +262,19 @@ function canonicalize(
   if (typeof value === 'function' || typeof value === 'symbol') {
     throw new TypeError(`Cannot hash ${typeof value} values.`);
   }
-  if (value instanceof Error) return normalizeError(value);
   if (value !== null && typeof value === 'object') {
+    let symbols: symbol[];
+    try {
+      symbols = Object.getOwnPropertySymbols(value);
+    } catch {
+      throw new TypeError('Cannot inspect symbol-keyed properties.');
+    }
+    if (symbols.length > 0) {
+      throw new TypeError('Cannot hash symbol-keyed properties.');
+    }
+    if (isErrorObject(value)) {
+      return { $type: 'error', value: normalizeError(value) };
+    }
     if (ancestors.has(value)) {
       throw new TypeError('Cannot hash cyclic values.');
     }
@@ -116,12 +283,18 @@ function canonicalize(
       if (Array.isArray(value)) {
         return canonicalizeArray(value, ancestors);
       }
-      return Object.fromEntries(
+      const object = Object.fromEntries(
         getPlainObjectEntries(value).map(([key, entryValue]) => [
           key,
           canonicalize(entryValue, ancestors),
         ]),
       );
+      // `$type` is reserved for canonical representations of values that JSON
+      // cannot encode. Escape user objects with that key so they cannot collide
+      // with undefined, bigint, special numbers, Error, or array-hole tags.
+      return Object.hasOwn(object, '$type')
+        ? { $type: 'object', value: object }
+        : object;
     } finally {
       ancestors.delete(value);
     }
@@ -146,8 +319,13 @@ function getHashPayload(components: HashableComponents): unknown {
       ) {
         throw new TypeError(`Component "${name}" has an invalid status.`);
       }
+      if (status === 'fulfilled' && !Object.hasOwn(fields, 'value')) {
+        throw new TypeError(
+          `Fulfilled component "${name}" must contain a value.`,
+        );
+      }
       return status === 'fulfilled'
-        ? [name, { value: canonicalize(fields.value) }]
+        ? [name, { value: fields.value }]
         : [name, { status }];
     }),
   );
@@ -185,17 +363,19 @@ export function componentsToDebugString(
   return JSON.stringify(
     components,
     (_key, value: unknown) =>
-      value instanceof Error
-        ? normalizeError(value)
-        : typeof value === 'bigint'
-          ? { $type: 'bigint', value: value.toString() }
-          : typeof value === 'number' &&
-              (!Number.isFinite(value) || Object.is(value, -0))
-            ? {
-                $type: 'number',
-                value: Object.is(value, -0) ? '-0' : String(value),
-              }
-            : value,
+      value === undefined
+        ? { $type: 'undefined' }
+        : isErrorObject(value)
+          ? normalizeError(value)
+          : typeof value === 'bigint'
+            ? { $type: 'bigint', value: value.toString() }
+            : typeof value === 'number' &&
+                (!Number.isFinite(value) || Object.is(value, -0))
+              ? {
+                  $type: 'number',
+                  value: Object.is(value, -0) ? '-0' : String(value),
+                }
+              : value,
     2,
   );
 }

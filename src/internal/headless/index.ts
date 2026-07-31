@@ -1,116 +1,193 @@
-// @ts-nocheck
 /* eslint-disable new-cap */
 import { captureError } from '../errors'
-import { lieProps, PARENT_PHANTOM } from '../lies'
+import { lieProps } from '../lies'
 import { instanceId } from '../utils/crypto'
 import { createTimer, queueEvent, IS_BLINK, logTestResult } from '../utils/helpers'
 
 import getPlatformEstimate from './getPlatformEstimate'
 import { getSystemFonts } from './getSystemFonts'
-export default async function getHeadlessFeatures({
-	webgl,
-	workerScope,
-}) {
+
+interface HeadlessInput {
+	webgl?: {
+		parameters?: Record<string, unknown>
+	}
+	workerScope?: {
+		userAgent?: string
+		webglRenderer?: string
+	}
+}
+
+interface UserAgentDataLike {
+	platform?: unknown
+	getHighEntropyValues?: (hints: string[]) => Promise<Record<string, unknown>>
+}
+
+const isObjectLike = (value: unknown): value is object =>
+	value !== null && (typeof value == 'object' || typeof value == 'function')
+
+const readProperty = (target: unknown, key: PropertyKey): unknown => {
+	try {
+		return isObjectLike(target) ? Reflect.get(target, key) : undefined
+	} catch {
+		return undefined
+	}
+}
+
+const getErrorName = (error: unknown): string | undefined => {
+	const name = readProperty(error, 'name')
+	return typeof name == 'string' ? name : undefined
+}
+
+const getUserAgentData = (): UserAgentDataLike | undefined => {
+	const value = readProperty(navigator, 'userAgentData')
+	return isObjectLike(value) ? (value as UserAgentDataLike) : undefined
+}
+
+const settleWithin = <T>(operation: PromiseLike<T>, fallback: T, limit: number = 3000): Promise<T> =>
+	new Promise((resolve) => {
+		let settled = false
+		const finish = (value: T) => {
+			if (settled) return
+			settled = true
+			clearTimeout(timeout)
+			resolve(value)
+		}
+		const timeout = setTimeout(() => finish(fallback), limit)
+		void Promise.resolve(operation).then(finish, () => finish(fallback))
+	})
+
+const isUserAgentDataBlank = async (userAgentData: UserAgentDataLike | undefined): Promise<boolean> => {
+	if (!userAgentData) return false
+	if (userAgentData.platform === '') return true
+	const getHighEntropyValues = userAgentData.getHighEntropyValues
+	if (typeof getHighEntropyValues != 'function') return false
+	const result = await settleWithin(
+		Promise.resolve().then(
+			() =>
+				Reflect.apply(getHighEntropyValues, userAgentData, [['platform']]) as Promise<Record<string, unknown>>,
+		),
+		{},
+	)
+	return result.platform === ''
+}
+
+const supportsCSS = (condition: string): boolean => {
+	try {
+		return typeof globalThis.CSS?.supports == 'function' && CSS.supports(condition)
+	} catch {
+		return false
+	}
+}
+
+const hasBadChromeRuntime = (): boolean => {
+	const chrome = readProperty(window, 'chrome')
+	const runtime = readProperty(chrome, 'runtime')
+	if (!isObjectLike(runtime)) return false
+	for (const methodName of ['sendMessage', 'connect']) {
+		const method = readProperty(runtime, methodName)
+		if (typeof method != 'function') return false
+		try {
+			if (Reflect.has(method, 'prototype')) return true
+			Reflect.construct(Object, [], method)
+			return true
+		} catch (error) {
+			if (getErrorName(error) != 'TypeError') return true
+		}
+	}
+	return false
+}
+
+export default async function getHeadlessFeatures({ webgl, workerScope }: HeadlessInput) {
 	try {
 		const timer = createTimer()
 		await queueEvent(timer)
 		const mimeTypes = Object.keys({ ...navigator.mimeTypes })
 
 		const systemFonts = getSystemFonts()
-		const [scores, highestScore, headlessEstimate] = getPlatformEstimate()
+		const platformEstimate = getPlatformEstimate()
+		const [scores, highestScore, headlessEstimate] = platformEstimate
 
 		interface Headless {
-			chromium: boolean,
-			likeHeadless: Record<string, boolean>,
-			headless: Record<string, boolean>,
-			stealth: Record<string, boolean>,
+			chromium: boolean
+			likeHeadless: Record<string, boolean>
+			headless: Record<string, boolean>
+			stealth: Record<string, boolean>
 		}
+		const notificationConstructor = readProperty(window, 'Notification')
+		const notificationPermission = readProperty(notificationConstructor, 'permission')
+		const userAgentData = getUserAgentData()
+		const uaDataIsBlank = await isUserAgentDataBlank(userAgentData)
 		const data: Headless = {
 			chromium: IS_BLINK,
 			likeHeadless: {
 				noChrome: IS_BLINK && !('chrome' in window),
-				hasPermissionsBug: (
+				hasPermissionsBug:
 					IS_BLINK &&
 					'permissions' in navigator &&
-					await (async () => {
-						const res = await navigator.permissions.query({ name: 'notifications' })
-						return (
-							res.state == 'prompt' &&
-							'Notification' in window &&
-							Notification.permission === 'denied'
-						)
-						})().catch(() => false)
-				),
+					(await settleWithin(
+						(async () => {
+							const res = await navigator.permissions.query({
+								name: 'notifications',
+							})
+							return (
+								res.state == 'prompt' &&
+								isObjectLike(notificationConstructor) &&
+								notificationPermission === 'denied'
+							)
+						})(),
+						false,
+					)),
 				noPlugins: IS_BLINK && navigator.plugins.length === 0,
 				noMimeTypes: IS_BLINK && mimeTypes.length === 0,
-				notificationIsDenied: (
+				notificationIsDenied:
+					IS_BLINK && isObjectLike(notificationConstructor) && notificationPermission == 'denied',
+				hasKnownBgColor:
 					IS_BLINK &&
-					'Notification' in window &&
-					(Notification.permission == 'denied')
-				),
-					hasKnownBgColor: IS_BLINK && (() => {
-						let rendered = PARENT_PHANTOM
-						let temporary = false
-						if (!PARENT_PHANTOM) {
-							rendered = document.createElement('div')
-							document.body.appendChild(rendered)
-							temporary = true
-						}
-						if (!rendered) return false
+					(() => {
+						const rendered = document.createElement('div')
+						rendered.setAttribute('style', 'position: absolute; left: -10000px; visibility: hidden;')
+						document.body.appendChild(rendered)
 						try {
-							rendered.setAttribute('style', `background-color: ActiveText`)
-							const { backgroundColor: activeText } = getComputedStyle(rendered) || []
+							rendered.style.backgroundColor = 'ActiveText'
+							const activeText =
+								rendered.ownerDocument.defaultView?.getComputedStyle(rendered).backgroundColor
 							return activeText === 'rgb(255, 0, 0)'
 						} finally {
-							if (temporary) rendered.remove()
+							rendered.remove()
 						}
 					})(),
-				prefersLightColor: matchMedia('(prefers-color-scheme: light)').matches,
-				uaDataIsBlank: (
-						'userAgentData' in navigator && navigator.userAgentData && (
-						// @ts-expect-error if userAgentData is null
-						navigator.userAgentData?.platform === '' ||
-							// @ts-expect-error if userAgentData is null
-							typeof navigator.userAgentData.getHighEntropyValues == 'function' &&
-							(await navigator.userAgentData.getHighEntropyValues(['platform'])
-								.catch(() => ({}))).platform === ''
-					)
-				),
-				pdfIsDisabled: (
-					'pdfViewerEnabled' in navigator && navigator.pdfViewerEnabled === false
-				),
-				noTaskbar: (
-					screen.height === screen.availHeight &&
-					screen.width === screen.availWidth
-				),
-				hasVvpScreenRes: (
-					(innerWidth === screen.width && outerHeight === screen.height) || (
-						'visualViewport' in window &&
-						// @ts-expect-error if unsupported
-							(visualViewport?.width === screen.width && visualViewport?.height === screen.height)
-					)
-				),
-				hasSwiftShader: /SwiftShader/.test(workerScope?.webglRenderer),
-				noWebShare: IS_BLINK && CSS.supports('accent-color: initial') && (
-					!('share' in navigator) || !('canShare' in navigator)
-				),
+				prefersLightColor: (() => {
+					try {
+						return matchMedia('(prefers-color-scheme: light)').matches
+					} catch {
+						return false
+					}
+				})(),
+				uaDataIsBlank,
+				pdfIsDisabled: 'pdfViewerEnabled' in navigator && navigator.pdfViewerEnabled === false,
+				noTaskbar: screen.height === screen.availHeight && screen.width === screen.availWidth,
+				hasVvpScreenRes:
+					(innerWidth === screen.width && outerHeight === screen.height) ||
+					('visualViewport' in window &&
+						window.visualViewport?.width === screen.width &&
+						window.visualViewport?.height === screen.height),
+				hasSwiftShader: /SwiftShader/.test(workerScope?.webglRenderer ?? ''),
+				noWebShare:
+					IS_BLINK &&
+					supportsCSS('accent-color: initial') &&
+					(!('share' in navigator) || !('canShare' in navigator)),
 				noContentIndex: !!headlessEstimate?.noContentIndex,
 				noContactsManager: !!headlessEstimate?.noContactsManager,
 				noDownlinkMax: !!headlessEstimate?.noDownlinkMax,
 			},
 			headless: {
-				webDriverIsOn: (
-					(CSS.supports('border-end-end-radius: initial') && navigator.webdriver === undefined) ||
+				webDriverIsOn:
+					(supportsCSS('border-end-end-radius: initial') && navigator.webdriver === undefined) ||
 					!!navigator.webdriver ||
-					!!lieProps['Navigator.webdriver']
-				),
-				hasHeadlessUA: (
-					/HeadlessChrome/.test(navigator.userAgent) ||
-					/HeadlessChrome/.test(navigator.appVersion)
-				),
-				hasHeadlessWorkerUA: !!workerScope && (
-					/HeadlessChrome/.test(workerScope.userAgent)
-				),
+					!!lieProps['Navigator.webdriver'],
+				hasHeadlessUA:
+					/HeadlessChrome/.test(navigator.userAgent) || /HeadlessChrome/.test(navigator.appVersion),
+				hasHeadlessWorkerUA: !!workerScope && /HeadlessChrome/.test(workerScope.userAgent ?? ''),
 			},
 			stealth: {
 				hasIframeProxy: (() => {
@@ -118,7 +195,7 @@ export default async function getHeadlessFeatures({
 						const iframe = document.createElement('iframe')
 						iframe.srcdoc = instanceId
 						return !!iframe.contentWindow
-					} catch (err) {
+					} catch {
 						return true
 					}
 				})(),
@@ -130,46 +207,24 @@ export default async function getHeadlessFeatures({
 						Object.getOwnPropertyNames(window).slice(highIndexRange).includes(key)
 					)
 				})(),
-				hasBadChromeRuntime: (() => {
-					// @ts-expect-error if unsupported
-						if (!('chrome' in window && chrome && 'runtime' in chrome)) {
-						return false
-					}
-					try {
-						// @ts-expect-error if unsupported
-						if ('prototype' in chrome.runtime.sendMessage ||
-							// @ts-expect-error if unsupported
-							'prototype' in chrome.runtime.connect) {
-							return true
-						}
-						// @ts-expect-error if unsupported
-						new chrome.runtime.sendMessage
-						// @ts-expect-error if unsupported
-						new chrome.runtime.connect
-						return true
-					} catch (err: any) {
-						return err.constructor.name != 'TypeError' ? true : false
-					}
-				})(),
-				hasToStringProxy: (
-					!!lieProps['Function.toString']
-				),
+				hasBadChromeRuntime: hasBadChromeRuntime(),
+				hasToStringProxy: !!lieProps['Function.toString'],
 				hasBadWebGL: (() => {
 					const { UNMASKED_RENDERER_WEBGL: gpu } = webgl?.parameters || {}
 					const { webglRenderer: workerGPU } = workerScope || {}
-					return (gpu && workerGPU && (gpu !== workerGPU))
+					return !!(gpu && workerGPU && gpu !== workerGPU)
 				})(),
 			},
 		}
 
 		const { likeHeadless, headless, stealth } = data
-		const likeHeadlessKeys = Object.keys(likeHeadless)
-		const headlessKeys = Object.keys(headless)
-		const stealthKeys = Object.keys(stealth)
-
-		const likeHeadlessRating = +((likeHeadlessKeys.filter((key) => likeHeadless[key]).length / likeHeadlessKeys.length) * 100).toFixed(0)
-		const headlessRating = +((headlessKeys.filter((key) => headless[key]).length / headlessKeys.length) * 100).toFixed(0)
-		const stealthRating = +((stealthKeys.filter((key) => stealth[key]).length / stealthKeys.length) * 100).toFixed(0)
+		const getRating = (values: Record<string, boolean>) => {
+			const flags = Object.values(values)
+			return +((flags.filter(Boolean).length / flags.length) * 100).toFixed(0)
+		}
+		const likeHeadlessRating = getRating(likeHeadless)
+		const headlessRating = getRating(headless)
+		const stealthRating = getRating(stealth)
 
 		logTestResult({ time: timer.stop(), test: 'headless', passed: true })
 		return {
@@ -178,11 +233,11 @@ export default async function getHeadlessFeatures({
 			headlessRating,
 			stealthRating,
 			systemFonts,
-			platformEstimate: [scores, highestScore],
+			platformEstimate: scores === undefined ? [] : [scores, highestScore],
 		}
 	} catch (error) {
 		logTestResult({ test: 'headless', passed: false })
 		captureError(error)
-		return
+		throw error
 	}
 }

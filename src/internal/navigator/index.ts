@@ -1,15 +1,81 @@
-// @ts-nocheck
 import { attempt, caniuse, captureError } from '../errors'
 import { lieProps, documentLie, getPluginLies } from '../lies'
 import { sendToTrash, gibberish } from '../trash'
 import { hashMini } from '../utils/crypto'
-import { createTimer, queueEvent, getOS, braveBrowser, decryptUserAgent, getUserAgentPlatform, isUAPostReduction, logTestResult, USER_AGENT_OS, PLATFORM_OS, Analysis } from '../utils/helpers'
+import {
+	createTimer,
+	queueEvent,
+	getOS,
+	braveBrowser,
+	decryptUserAgent,
+	getUserAgentPlatform,
+	isUAPostReduction,
+	logTestResult,
+	USER_AGENT_OS,
+	PLATFORM_OS,
+	Analysis,
+} from '../utils/helpers'
+
+interface WorkerNavigatorData {
+	platform?: string
+	userAgent?: string
+	deviceMemory?: number
+	hardwareConcurrency?: number
+	language?: string
+	languages?: readonly string[]
+	webglRenderer?: string
+}
+
+interface UserAgentBrand {
+	brand: string
+	version: string
+}
+
+interface HighEntropyValues extends Record<string, unknown> {
+	brands?: UserAgentBrand[]
+	mobile?: boolean
+}
+
+interface UserAgentDataLike {
+	brands?: UserAgentBrand[]
+	mobile?: boolean
+	getHighEntropyValues?: (hints: string[]) => Promise<HighEntropyValues>
+}
+
+interface GPUAdapterInfoLike {
+	architecture?: string
+	description?: string
+	device?: string
+	vendor?: string
+}
+
+interface GPUAdapterLike {
+	features?: ReadonlySet<string>
+	info?: GPUAdapterInfoLike
+	limits?: Record<string, number>
+	requestAdapterInfo?: () => Promise<GPUAdapterInfoLike>
+}
+
+interface NavigatorExtensions {
+	deviceMemory?: number
+	globalPrivacyControl?: boolean
+	oscpu?: string
+	userAgentData?: UserAgentDataLike
+	bluetooth?: {
+		getAvailability?: () => Promise<boolean>
+	}
+	gpu?: {
+		requestAdapter: () => Promise<GPUAdapterLike | null>
+	}
+}
+
 // special thanks to https://arh.antoinevastel.com for inspiration
-export default async function getNavigator(workerScope) {
+export default async function getNavigator(workerScope?: WorkerNavigatorData) {
 	try {
+		const extendedNavigator = navigator as Navigator & NavigatorExtensions
 		const timer = createTimer()
 		await queueEvent(timer)
-		let lied = (
+		let lied =
 			lieProps['Navigator.appVersion'] ||
 			lieProps['Navigator.deviceMemory'] ||
 			lieProps['Navigator.doNotTrack'] ||
@@ -22,17 +88,68 @@ export default async function getNavigator(workerScope) {
 			lieProps['Navigator.userAgent'] ||
 			lieProps['Navigator.vendor'] ||
 			lieProps['Navigator.plugins'] ||
-			lieProps['Navigator.mimeTypes']
-		) || false
+			lieProps['Navigator.mimeTypes'] ||
+			false
 
-		const credibleUserAgent = (
-			'chrome' in window ? navigator.userAgent.includes(navigator.appVersion) : true
-		)
+		const credibleUserAgent = 'chrome' in window ? navigator.userAgent.includes(navigator.appVersion) : true
+		const settleAsyncSignal = <T>(operation: T | PromiseLike<T>, fallback: T, limit: number = 3000): Promise<T> =>
+			new Promise((resolve) => {
+				let settled = false
+				const finish = (value: T) => {
+					if (settled) return
+					settled = true
+					clearTimeout(timeout)
+					resolve(value)
+				}
+				const timeout = setTimeout(() => finish(fallback), limit)
+				void Promise.resolve(operation).then(finish, () => finish(fallback))
+			})
+		const languageData = attempt(() => {
+			const { language, languages } = navigator
+
+			if (language && languages.length) {
+				const lang = /^.{0,2}/g.exec(language)?.[0]
+				const langs = /^.{0,2}/g.exec(languages[0] ?? '')?.[0]
+				if (langs != lang) {
+					sendToTrash('language/languages', `${[language, languages].join(' ')} mismatch`)
+				}
+			}
+
+			if (workerScope && language != workerScope.language) {
+				lied = true
+				documentLie(`Navigator.language`, `${language} does not match worker scope`)
+			}
+
+			const workerLanguages = workerScope?.languages
+			if (
+				workerLanguages &&
+				(languages.length != workerLanguages.length ||
+					languages.some((value, index) => value != workerLanguages[index]))
+			) {
+				lied = true
+				documentLie(`Navigator.languages`, `${languages} does not match worker scope`)
+			}
+
+			return { language, languages: [...languages] }
+		}, 'language(s) failed')
 		const data = {
 			platform: attempt(() => {
 				const { platform } = navigator
-				const systems = ['win', 'linux', 'mac', 'arm', 'pike', 'linux', 'iphone', 'ipad', 'ipod', 'android', 'x11']
-				const trusted = typeof platform == 'string' && systems.filter((val) => platform.toLowerCase().includes(val))[0]
+				const systems = [
+					'win',
+					'linux',
+					'mac',
+					'arm',
+					'pike',
+					'linux',
+					'iphone',
+					'ipad',
+					'ipod',
+					'android',
+					'x11',
+				]
+				const trusted =
+					typeof platform == 'string' && systems.filter((val) => platform.toLowerCase().includes(val))[0]
 
 				if (!trusted) {
 					sendToTrash(`platform`, `${platform} is unusual`)
@@ -56,6 +173,7 @@ export default async function getNavigator(workerScope) {
 			system: attempt(() => getOS(navigator.userAgent), 'userAgent system failed'),
 			userAgentParsed: await attempt(async () => {
 				const reportedUserAgent = caniuse(() => navigator.userAgent)
+				if (reportedUserAgent === undefined) return undefined
 				const reportedSystem = getOS(reportedUserAgent)
 				const isBrave = await braveBrowser()
 				const report = decryptUserAgent({
@@ -76,7 +194,7 @@ export default async function getNavigator(workerScope) {
 					sendToTrash('userAgent', `extra spaces detected`)
 				}
 				const gibbers = gibberish(userAgent)
-				if (!!gibbers.length) {
+				if (gibbers.length) {
 					sendToTrash(`userAgent is gibberish`, userAgent)
 				}
 
@@ -84,7 +202,7 @@ export default async function getNavigator(workerScope) {
 					lied = true // documented in the worker source
 				}
 
-				return userAgent.trim().replace(/\s{2,}/, ' ')
+				return userAgent.trim().replace(/\s{2,}/g, ' ')
 			}, 'userAgent failed'),
 			uaPostReduction: isUAPostReduction((navigator || {}).userAgent),
 			appVersion: attempt(() => {
@@ -100,34 +218,32 @@ export default async function getNavigator(workerScope) {
 					sendToTrash('appVersion', `extra spaces detected`)
 				}
 
-				return appVersion.trim().replace(/\s{2,}/, ' ')
+				return appVersion.trim().replace(/\s{2,}/g, ' ')
 			}, 'appVersion failed'),
 			deviceMemory: attempt(() => {
 				if (!('deviceMemory' in navigator)) {
 					return undefined
 				}
 
-				// @ts-ignore
-				const { deviceMemory } = navigator
-				const trusted = {
-					'0.25': true,
-					'0.5': true,
-					'1': true,
-					'2': true,
-					'4': true,
-					'8': true,
-					'16': true,
-					'32': true,
-				}
-				if (!trusted[deviceMemory]) {
+				const { deviceMemory } = extendedNavigator
+				if (typeof deviceMemory != 'number') return undefined
+				const trusted = new Set([0.25, 0.5, 1, 2, 4, 8, 16, 32])
+				if (!trusted.has(deviceMemory)) {
 					sendToTrash('deviceMemory', `${deviceMemory} is not a valid value [0.25, 0.5, 1, 2, 4, 8, 16, 32]`)
 				}
 
-				// @ts-expect-error memory is undefined if not supported
-				const memory = performance?.memory?.jsHeapSizeLimit || null
-				const memoryInGigabytes = memory ? +(memory/1073741824).toFixed(1) : 0
+				const memory =
+					(
+						performance as Performance & {
+							memory?: { jsHeapSizeLimit?: number }
+						}
+					).memory?.jsHeapSizeLimit || null
+				const memoryInGigabytes = memory ? +(memory / 1073741824).toFixed(1) : 0
 				if (memoryInGigabytes > deviceMemory) {
-					sendToTrash('deviceMemory', `available memory ${memoryInGigabytes}GB is greater than device memory ${deviceMemory}GB`)
+					sendToTrash(
+						'deviceMemory',
+						`available memory ${memoryInGigabytes}GB is greater than device memory ${deviceMemory}GB`,
+					)
 				}
 
 				if (workerScope && deviceMemory !== workerScope.deviceMemory) {
@@ -138,18 +254,8 @@ export default async function getNavigator(workerScope) {
 			}, 'deviceMemory failed'),
 			doNotTrack: attempt(() => {
 				const { doNotTrack } = navigator
-				const trusted = {
-					'1': !0,
-					'true': !0,
-					'yes': !0,
-					'0': !0,
-					'false': !0,
-					'no': !0,
-					'unspecified': !0,
-					'null': !0,
-					'undefined': !0,
-				}
-				if (!trusted[doNotTrack]) {
+				const trusted = new Set(['1', 'true', 'yes', '0', 'false', 'no', 'unspecified', 'null', 'undefined'])
+				if (!trusted.has(String(doNotTrack))) {
 					sendToTrash('doNotTrack - unusual result', doNotTrack)
 				}
 				return doNotTrack
@@ -158,20 +264,9 @@ export default async function getNavigator(workerScope) {
 				if (!('globalPrivacyControl' in navigator)) {
 					return undefined
 				}
-				// @ts-ignore
-				const { globalPrivacyControl } = navigator
-				const trusted = {
-					'1': !0,
-					'true': !0,
-					'yes': !0,
-					'0': !0,
-					'false': !0,
-					'no': !0,
-					'unspecified': !0,
-					'null': !0,
-					'undefined': !0,
-				}
-				if (!trusted[globalPrivacyControl]) {
+				const { globalPrivacyControl } = extendedNavigator
+				const trusted = new Set(['1', 'true', 'yes', '0', 'false', 'no', 'unspecified', 'null', 'undefined'])
+				if (!trusted.has(String(globalPrivacyControl))) {
 					sendToTrash('globalPrivacyControl - unusual result', globalPrivacyControl)
 				}
 				return globalPrivacyControl
@@ -189,37 +284,8 @@ export default async function getNavigator(workerScope) {
 
 				return hardwareConcurrency
 			}, 'hardwareConcurrency failed'),
-			language: attempt(() => {
-				const { language, languages } = navigator
-
-				if (language && languages) {
-					// @ts-ignore
-					const lang = /^.{0,2}/g.exec(language)[0]
-					// @ts-ignore
-					const langs = /^.{0,2}/g.exec(languages[0])[0]
-					if (langs != lang) {
-						sendToTrash('language/languages', `${[language, languages].join(' ')} mismatch`)
-					}
-				}
-
-				if (workerScope && language != workerScope.language) {
-					lied = true
-					documentLie(
-						`Navigator.language`,
-						`${language} does not match worker scope`,
-					)
-				}
-
-				if (workerScope && ''+languages !== workerScope.languages) {
-					lied = true
-					documentLie(
-						`Navigator.languages`,
-						`${languages} does not match worker scope`,
-					)
-				}
-
-				return languages ? `${languages.join(', ')} (${language})` : `${language} ${languages}`
-			}, 'language(s) failed'),
+			language: languageData?.language,
+			languages: languageData?.languages,
 			maxTouchPoints: attempt(() => {
 				if (!('maxTouchPoints' in navigator)) {
 					return null
@@ -231,22 +297,21 @@ export default async function getNavigator(workerScope) {
 				const { mimeTypes } = navigator
 				return mimeTypes ? [...mimeTypes].map((m) => m.type) : []
 			}, 'mimeTypes failed'),
-			// @ts-ignore
-			oscpu: attempt(() => navigator.oscpu, 'oscpu failed'),
+			oscpu: attempt(() => extendedNavigator.oscpu, 'oscpu failed'),
 			plugins: attempt(() => {
 				// https://html.spec.whatwg.org/multipage/system-state.html#pdf-viewing-support
 				const { plugins } = navigator
 				if (!(plugins instanceof PluginArray)) {
 					return
 				}
-				const response = plugins ? [...plugins]
-					.map((p) => ({
-						name: p.name,
-						description: p.description,
-						filename: p.filename,
-						// @ts-ignore
-						version: p.version,
-					})) : []
+				const response = plugins
+					? [...plugins].map((p) => ({
+							name: p.name,
+							description: p.description,
+							filename: p.filename,
+							version: (p as Plugin & { version?: string }).version,
+						}))
+					: []
 
 				const { lies } = getPluginLies(plugins, navigator.mimeTypes)
 				if (lies.length) {
@@ -278,65 +343,83 @@ export default async function getNavigator(workerScope) {
 			}, 'navigator keys failed'),
 		}
 
-		const getUserAgentData = () => attempt(() => {
-			// @ts-ignore
-			if (!navigator.userAgentData ||
-				// @ts-ignore
-				!navigator.userAgentData.getHighEntropyValues) {
-				return
-			}
-			// @ts-ignore
-			return navigator.userAgentData.getHighEntropyValues(
-				['platform', 'platformVersion', 'architecture', 'bitness', 'model', 'uaFullVersion'],
-			).then((data) => {
-				// @ts-ignore
-				const { brands, mobile } = navigator.userAgentData || {}
-				const compressedBrands = (brands, captureVersion = false) => brands
-					.filter((obj) => !/Not/.test(obj.brand)).map((obj) => `${obj.brand}${captureVersion ? ` ${obj.version}` : ''}`)
-				const removeChromium = (brands) => (
-					brands.length > 1 ? brands.filter((brand) => !/Chromium/.test(brand)) : brands
-				)
-
-				// compress brands
-				if (!data.brands) {
-					data.brands = brands
+		const getUserAgentData = () =>
+			attempt(() => {
+				const userAgentData = extendedNavigator.userAgentData
+				if (!userAgentData || typeof userAgentData.getHighEntropyValues != 'function') {
+					return
 				}
-				data.brandsVersion = compressedBrands(data.brands, true)
-				data.brands = compressedBrands(data.brands)
-				data.brandsVersion = removeChromium(data.brandsVersion)
-				data.brands = removeChromium(data.brands)
+				return userAgentData
+					.getHighEntropyValues([
+						'platform',
+						'platformVersion',
+						'architecture',
+						'bitness',
+						'model',
+						'uaFullVersion',
+					])
+					.then((rawData) => {
+						const { brands, mobile } = userAgentData
+						const compressedBrands = (
+							brandList: readonly UserAgentBrand[] = [],
+							captureVersion: boolean = false,
+						) =>
+							brandList
+								.filter((obj) => !/Not/.test(obj.brand))
+								.map((obj) => `${obj.brand}${captureVersion ? ` ${obj.version}` : ''}`)
+						const removeChromium = (brandList: string[]) =>
+							brandList.length > 1 ? brandList.filter((brand) => !/Chromium/.test(brand)) : brandList
 
-				if (!data.mobile) {
-					data.mobile = mobile
+						// compress brands
+						const resolvedBrands = Array.isArray(rawData.brands)
+							? rawData.brands
+							: Array.isArray(brands)
+								? brands
+								: []
+						const data: Record<string, unknown> = { ...rawData }
+						const brandsVersion = compressedBrands(resolvedBrands, true)
+						const brandsWithoutVersions = compressedBrands(resolvedBrands)
+						data.brandsVersion = removeChromium(brandsVersion)
+						data.brands = removeChromium(brandsWithoutVersions)
+
+						if (data.mobile === undefined) data.mobile = mobile
+						const dataSorted = Object.keys(data)
+							.sort()
+							.reduce<Record<string, unknown>>((acc, key) => {
+								acc[key] = data[key]
+								return acc
+							}, {})
+						return dataSorted
+					})
+			}, 'userAgentData failed')
+
+		const getBluetoothAvailability = () =>
+			attempt(() => {
+				const bluetooth = extendedNavigator.bluetooth
+				if (!bluetooth || typeof bluetooth.getAvailability != 'function') {
+					return undefined
 				}
-				const dataSorted = Object.keys(data).sort().reduce((acc, key) => {
-					acc[key] = data[key]
-					return acc
-				}, {})
-				return dataSorted
-			})
-		}, 'userAgentData failed')
+				return bluetooth.getAvailability()
+			}, 'bluetoothAvailability failed')
 
-		const getBluetoothAvailability = () => attempt(() => {
-			if (
-				!('bluetooth' in navigator) ||
-				// @ts-ignore
-				!navigator.bluetooth ||
-				// @ts-ignore
-				!navigator.bluetooth.getAvailability) {
-				return undefined
-			}
-			// @ts-ignore
-			return navigator.bluetooth.getAvailability()
-		}, 'bluetoothAvailability failed')
+		const getPermissions = () =>
+			attempt(() => {
+				if (typeof navigator.permissions?.query != 'function') return undefined
+				const getPermissionState = (name: string) =>
+					settleAsyncSignal(
+						Promise.resolve()
+							.then(
+								() =>
+									Reflect.apply(navigator.permissions.query, navigator.permissions, [
+										{ name },
+									]) as Promise<PermissionStatus>,
+							)
+							.then((res) => ({ name, state: res.state })),
+						{ name, state: 'unknown' },
+					)
 
-		const getPermissions = () => attempt(() => {
-			const getPermissionState = (name) => navigator.permissions.query({ name })
-				.then((res) => ({ name, state: res.state }))
-				.catch((error) => ({ name, state: 'unknown' }))
-
-			// https://w3c.github.io/permissions/#permission-registry
-			const permissions = !('permissions' in navigator) ? undefined : Promise.all([
+				// https://w3c.github.io/permissions/#permission-registry
+				const permissions = Promise.all([
 					getPermissionState('accelerometer'),
 					getPermissionState('ambient-light-sensor'),
 					getPermissionState('background-fetch'),
@@ -359,86 +442,91 @@ export default async function getNavigator(workerScope) {
 					getPermissionState('screen-wake-lock'),
 					getPermissionState('speaker'),
 					getPermissionState('speaker-selection'),
-				]).then((permissions) => permissions.reduce((acc, perm) => {
-					const { state, name } = perm || {}
-					if (acc[state]) {
-						acc[state].push(name)
-						return acc
-					}
-					acc[state] = [name]
-					return acc
-				}, {})).catch((error) => captureError(error, 'permissions failed'))
-			return permissions
-		}, 'permissions failed')
+				])
+					.then((permissions) =>
+						permissions.reduce<Record<string, string[]>>((acc, perm) => {
+							const { state, name } = perm
+							if (acc[state]) {
+								acc[state].push(name)
+								return acc
+							}
+							acc[state] = [name]
+							return acc
+						}, {}),
+					)
+					.catch((error) => captureError(error, 'permissions failed'))
+				return permissions
+			}, 'permissions failed')
 
-		const getWebGpu = () => attempt(() => {
-			if (!('gpu' in navigator)) {
-				return
-			}
-			// @ts-expect-error if unsupported
-			return navigator.gpu.requestAdapter().then((adapter) => {
-				if (!adapter) return
-				const { limits = {}, features = [] } = adapter || {}
-				// @ts-expect-error if unsupported
-				const handleInfo = (info) => {
-					const { architecture, description, device, vendor } = info
-					const adapterInfo = [vendor, architecture, description, device]
-					const featureValues = [...features.values()]
-					const limitsData = ((limits) => {
-						const data: Record<string, number> = {}
-						// eslint-disable-next-line guard-for-in
-						for (const prop in limits) {
-							data[prop] = limits[prop]
-						}
-						return data
-					})(limits)
-
-					Analysis.webGpuAdapter = adapterInfo
-					Analysis.webGpuFeatures = featureValues
-					Analysis.webGpuLimits = hashMini(limitsData)
-
-					return {
-						adapterInfo,
-						limits: limitsData,
-					}
+		const getWebGpu = () =>
+			attempt(() => {
+				const gpu = (extendedNavigator as NavigatorExtensions).gpu
+				if (!gpu || typeof gpu.requestAdapter != 'function') {
+					return
 				}
-				const { info } = adapter
-				return info ? handleInfo(info) : adapter.requestAdapterInfo().then(handleInfo)
-			})
-		}, 'webgpu failed')
+				return gpu.requestAdapter().then((adapter) => {
+					if (!adapter) return
+					const { limits = {}, features = [] } = adapter
+					const handleInfo = (info: GPUAdapterInfoLike = {}) => {
+						const { architecture, description, device, vendor } = info
+						const adapterInfo = [vendor, architecture, description, device]
+						const featureValues = [...features.values()]
+						const limitsData = ((limits) => {
+							const data: Record<string, number> = {}
+							// eslint-disable-next-line guard-for-in
+							for (const prop in limits) {
+								const value = limits[prop]
+								if (typeof value == 'number') data[prop] = value
+							}
+							return data
+						})(limits)
+
+						return {
+							analysis: {
+								adapter: adapterInfo,
+								features: featureValues,
+								limits: hashMini(limitsData),
+							},
+							data: {
+								adapterInfo,
+								limits: limitsData,
+							},
+						}
+					}
+					const { info } = adapter
+					return info
+						? handleInfo(info)
+						: typeof adapter.requestAdapterInfo == 'function'
+							? adapter.requestAdapterInfo().then(handleInfo)
+							: handleInfo()
+				})
+			}, 'webgpu failed')
 
 		await queueEvent(timer)
-		return Promise.all([
-			getUserAgentData(),
-			getBluetoothAvailability(),
+		const [userAgentData, bluetoothAvailability, permissions, webgpuResult] = await Promise.all([
+			settleAsyncSignal(getUserAgentData(), undefined),
+			settleAsyncSignal(getBluetoothAvailability(), undefined),
 			getPermissions(),
-			getWebGpu(),
-		]).then(([
+			settleAsyncSignal(getWebGpu(), undefined),
+		])
+		const { analysis: webGpuAnalysis, data: webgpu } = webgpuResult ?? {}
+		if (webGpuAnalysis) {
+			Analysis.webGpuAdapter = webGpuAnalysis.adapter
+			Analysis.webGpuFeatures = webGpuAnalysis.features
+			Analysis.webGpuLimits = webGpuAnalysis.limits
+		}
+		logTestResult({ time: timer.stop(), test: 'navigator', passed: true })
+		return {
+			...data,
 			userAgentData,
 			bluetoothAvailability,
 			permissions,
 			webgpu,
-		]) => {
-			logTestResult({ time: timer.stop(), test: 'navigator', passed: true })
-			return {
-				...data,
-				userAgentData,
-				bluetoothAvailability,
-				permissions,
-				webgpu,
-				lied,
-			}
-		}).catch((error) => {
-			captureError(error, 'async navigator signals failed')
-			logTestResult({ time: timer.stop(), test: 'navigator', passed: true })
-			return {
-				...data,
-				lied,
-			}
-		})
+			lied,
+		}
 	} catch (error) {
 		logTestResult({ test: 'navigator', passed: false })
 		captureError(error, 'Navigator failed or blocked by client')
-		return
+		throw error
 	}
 }

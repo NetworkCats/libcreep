@@ -1,8 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
+  createTimer,
   decryptUserAgent,
   formatEmojiSet,
+  getBraveMode,
   getBraveUnprotectedParameters,
   getGpuBrand,
   getOS,
@@ -12,8 +14,17 @@ import {
   getUserAgentRestored,
   hashSlice,
 } from '../src/internal/utils/helpers.js';
+import { formatTimezoneLocation } from '../src/internal/timezone/index.js';
+import { createMeasurementFragment } from '../src/internal/utils/measurement.js';
 
 describe('platform classification utilities', () => {
+  it('formats every segment of timezone identifiers', () => {
+    expect(formatTimezoneLocation('America/Port_of_Spain')).toBe(
+      'America, Port of Spain',
+    );
+    expect(formatTimezoneLocation(undefined)).toBeUndefined();
+  });
+
   it.each([
     ['Windows Phone 10', 'Windows Phone'],
     ['Mozilla/5.0 (Windows NT 10.0)', 'Windows'],
@@ -135,6 +146,92 @@ describe('user-agent interpretation', () => {
 });
 
 describe('fingerprint value helpers', () => {
+  it('does not count the same timer interval more than once', () => {
+    const now = vi
+      .spyOn(performance, 'now')
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(5)
+      .mockReturnValueOnce(10)
+      .mockReturnValueOnce(14);
+    const timer = createTimer();
+
+    timer.start();
+    expect(timer.stop()).toBe(5);
+    expect(timer.stop()).toBe(5);
+    timer.start();
+    expect(timer.stop()).toBe(9);
+    expect(now).toHaveBeenCalledTimes(4);
+  });
+
+  it('checks Brave audio mode without mutating the window constructor', () => {
+    const offlineDescriptor = Object.getOwnPropertyDescriptor(
+      window,
+      'OfflineAudioContext',
+    );
+    const webkitDescriptor = Object.getOwnPropertyDescriptor(
+      window,
+      'webkitOfflineAudioContext',
+    );
+    if (offlineDescriptor && !offlineDescriptor.configurable) return;
+    if (webkitDescriptor && !webkitDescriptor.configurable) return;
+    const disconnect = vi.fn();
+    const close = vi.fn();
+    class FakeOfflineAudioContext {
+      createAnalyser() {
+        return {
+          disconnect,
+          frequencyBinCount: 2,
+          getFloatFrequencyData(data: Float32Array) {
+            data.fill(-Infinity);
+          },
+        };
+      }
+      close = close;
+    }
+
+    try {
+      Object.defineProperty(window, 'OfflineAudioContext', {
+        configurable: true,
+        value: undefined,
+        writable: true,
+      });
+      Object.defineProperty(window, 'webkitOfflineAudioContext', {
+        configurable: true,
+        value: FakeOfflineAudioContext,
+        writable: true,
+      });
+
+      getBraveMode();
+      expect(window.OfflineAudioContext).toBeUndefined();
+      expect(disconnect).toHaveBeenCalledOnce();
+      expect(close).toHaveBeenCalledOnce();
+    } finally {
+      if (offlineDescriptor) {
+        Object.defineProperty(window, 'OfflineAudioContext', offlineDescriptor);
+      } else {
+        delete (window as unknown as Record<string, unknown>)
+          .OfflineAudioContext;
+      }
+      if (webkitDescriptor) {
+        Object.defineProperty(
+          window,
+          'webkitOfflineAudioContext',
+          webkitDescriptor,
+        );
+      } else {
+        delete (window as unknown as Record<string, unknown>)
+          .webkitOfflineAudioContext;
+      }
+    }
+  });
+
+  it('preserves false and zero values in measurement templates', () => {
+    const fragment = createMeasurementFragment`<div data-zero="${0}" data-false="${false}"></div>`;
+    const element = fragment.firstElementChild;
+    expect(element?.getAttribute('data-zero')).toBe('0');
+    expect(element?.getAttribute('data-false')).toBe('false');
+  });
+
   it('removes Brave-randomized WebGL parameters', () => {
     expect(
       getBraveUnprotectedParameters({
@@ -178,5 +275,15 @@ describe('fingerprint value helpers', () => {
     expect(getGpuBrand('Mesa Intel UHD Graphics')).toBe('INTEL');
     expect(getGpuBrand('Mystery Rasterizer')).toBe('OTHER');
     expect(getGpuBrand('')).toBeNull();
+  });
+
+  it('normalizes GPU brands without locale-sensitive casing', () => {
+    const localeUpperCase = vi
+      .spyOn(String.prototype, 'toLocaleUpperCase')
+      .mockImplementation(() => {
+        throw new Error('locale-dependent');
+      });
+    expect(getGpuBrand('Mesa Intel UHD Graphics')).toBe('INTEL');
+    expect(localeUpperCase).not.toHaveBeenCalled();
   });
 });

@@ -60,6 +60,82 @@ describe('detector error utilities', () => {
     ]);
   });
 
+  it('never throws while inspecting hostile error-like values', async () => {
+    const { captureError, getCapturedErrors } =
+      await import('../src/internal/errors/index.js');
+    const hostile = Object.defineProperties(
+      {},
+      {
+        message: {
+          get() {
+            throw new Error('blocked message getter');
+          },
+        },
+        name: {
+          get() {
+            throw new Error('blocked name getter');
+          },
+        },
+      },
+    );
+
+    expect(() => captureError(hostile)).not.toThrow();
+    expect(() =>
+      captureError({ message: Symbol('failure'), name: 'Error' }),
+    ).not.toThrow();
+    expect(getCapturedErrors().data).toEqual([
+      { trustedMessage: undefined, trustedName: undefined },
+      { trustedMessage: undefined, trustedName: 'Error' },
+    ]);
+  });
+
+  it('assimilates thenables and contains invocation failures', async () => {
+    const { attempt, caniuse, getCapturedErrors } =
+      await import('../src/internal/errors/index.js');
+    const use = caniuse as (
+      fn: () => unknown,
+      chain?: string[],
+      args?: unknown[],
+      method?: boolean,
+    ) => unknown;
+    const thenable = {
+      // oxlint-disable-next-line unicorn/no-thenable -- verifies Promise assimilation in attempt()
+      then(_resolve: (value: unknown) => void, reject: (error: Error) => void) {
+        reject(new TypeError('thenable detector failure'));
+      },
+    };
+    const api = {
+      nested: {
+        value: 7,
+        read(this: { value: number }, offset: number) {
+          return this.value + offset;
+        },
+        fail() {
+          throw new Error('optional method failed');
+        },
+      },
+    };
+
+    await expect(attempt(() => thenable)).resolves.toBeUndefined();
+    expect(use(() => api, ['nested', 'read'], [5], true)).toBe(12);
+    expect(use(() => api, ['nested', 'fail'], [], true)).toBeUndefined();
+    expect(getCapturedErrors().data).toEqual([
+      {
+        trustedMessage: 'thenable detector failure',
+        trustedName: 'TypeError',
+      },
+    ]);
+  });
+
+  it('does not expose its mutable internal error array', async () => {
+    const { captureError, getCapturedErrors } =
+      await import('../src/internal/errors/index.js');
+    captureError(new Error('captured detector failure'));
+    getCapturedErrors().data.length = 0;
+
+    expect(getCapturedErrors().data).toHaveLength(1);
+  });
+
   it('reads nested APIs and safely invokes optional methods', async () => {
     const { caniuse } = await import('../src/internal/errors/index.js');
     const use = caniuse as (

@@ -1,12 +1,12 @@
-// @ts-nocheck
 
 const GIGABYTE = 1073741824 // bytes
+const ASYNC_PROBE_TIMEOUT_MS = 3000
 
 function getMaxCallStackSize(): number {
   const fn = (): number => {
     try {
       return 1+fn()
-    } catch (err) {
+	    } catch {
       return 1
     }
   }
@@ -16,10 +16,10 @@ function getMaxCallStackSize(): number {
 
 // based on and inspired by
 // https://github.com/Joe12387/OP-Fingerprinting-Script/blob/main/opfs.js#L443
-function getTimingResolution(): [number, number] {
+export function getTimingResolution(): [number, number] {
   const maxRuns = 5000
-  let valA = 1
-  let valB = 1
+  let valA = Infinity
+  let valB = Infinity
   let res
 
   for (let i = 0; i < maxRuns; i++) {
@@ -36,20 +36,22 @@ function getTimingResolution(): [number, number] {
     }
   }
 
-  return [valA, valB]
+  const resolution = Number.isFinite(valA) ? valA : 0
+  return [resolution, Number.isFinite(valB) ? valB : resolution]
 }
 
 function getClientLitter(): string[] {
   let iframe: HTMLIFrameElement | undefined
   try {
     iframe = document.createElement('iframe')
+    iframe.hidden = true
     document.body.appendChild(iframe)
     const iframeWindow = iframe.contentWindow
     const windowKeys = Object.getOwnPropertyNames(window)
     const iframeKeys = Object.getOwnPropertyNames(iframeWindow)
     const clientKeys = windowKeys.filter((x) => !iframeKeys.includes(x))
     return clientKeys
-  } catch (err) {
+	  } catch {
     return []
   } finally {
     iframe?.remove()
@@ -57,6 +59,7 @@ function getClientLitter(): string[] {
 }
 
 function getClientCode(): string[] {
+  if (typeof window == 'undefined') return []
   const limit = 50
   const names = Object.getOwnPropertyNames(window).slice(-limit)
   const [p1, p2] = (1).constructor.toString().split((1).constructor.name)
@@ -67,7 +70,7 @@ function getClientCode(): string[] {
     )
   }
   const isClient = (key: string) => {
-    if (/_$/.test(key)) return true
+	    if (key.endsWith('_')) return true
     const d = Object.getOwnPropertyDescriptor(window, key)
     if (!d) return true
     return key === 'chrome' ? names.includes(key) : !isEngine(d.get || d.value)
@@ -83,43 +86,132 @@ interface BatteryManager {
   dischargingTime: number
   level: number
 }
-async function getBattery(): Promise<BatteryManager | null> {
-  if (typeof navigator?.getBattery != 'function') return null
-  // @ts-expect-error if not supported
-  return navigator.getBattery().catch(() => null)
+interface LegacyTemporaryStorage {
+  queryUsageAndQuota(
+    success: (usage: number, quota: number) => void,
+    failure?: (error?: unknown) => void,
+  ): void
 }
 
-export async function getStorage(): Promise<number | null> {
-  if (typeof navigator?.storage?.estimate != 'function') return null
-  const quotaFromEstimate = navigator.storage.estimate()
-    .then(({ quota }) => quota ?? null)
-    .catch(() => null)
-  // @ts-expect-error legacy Blink API
-  const queryUsageAndQuota = navigator.webkitTemporaryStorage?.queryUsageAndQuota
+interface NetworkInformationLike {
+  downlink?: number
+  downlinkMax?: number
+  effectiveType?: string
+  rtt?: number
+  saveData?: boolean
+  type?: string
+}
+
+type ExtendedNavigator = Navigator & {
+  connection?: NetworkInformationLike
+  getBattery?: () => Promise<BatteryManager>
+  webkitTemporaryStorage?: LegacyTemporaryStorage
+}
+
+const getAbortReason = (signal?: AbortSignal) => (
+  signal?.reason ?? new DOMException('Status detection was aborted.', 'AbortError')
+)
+
+const throwIfAborted = (signal?: AbortSignal) => {
+  if (signal?.aborted) throw getAbortReason(signal)
+}
+
+function settleWithin<T, F>(
+	promise: Promise<T>,
+	fallback: F,
+	signal?: AbortSignal,
+): Promise<T | F> {
+	throwIfAborted(signal)
+	return new Promise<T | F>((resolve, reject) => {
+		let settled = false
+		let timeout: ReturnType<typeof setTimeout> | undefined
+		const finish = (value: T | unknown, rejected: boolean) => {
+			if (settled) return
+			settled = true
+			clearTimeout(timeout)
+			signal?.removeEventListener('abort', abort)
+			if (rejected) reject(value)
+			else resolve(value as T | F)
+		}
+		const abort = () => finish(getAbortReason(signal), true)
+		timeout = setTimeout(() => finish(fallback, false), ASYNC_PROBE_TIMEOUT_MS)
+		signal?.addEventListener('abort', abort, { once: true })
+		if (signal?.aborted) return abort()
+		promise.then(
+			(value) => finish(value, false),
+			() => finish(fallback, false),
+		)
+	})
+}
+
+async function getBattery(signal?: AbortSignal): Promise<BatteryManager | null> {
+	throwIfAborted(signal)
+	const browserNavigator = navigator as ExtendedNavigator
+	if (typeof browserNavigator.getBattery != 'function') return null
+	return settleWithin(
+		Promise.resolve().then(() => browserNavigator.getBattery!()),
+		null,
+		signal,
+	)
+}
+
+export async function getStorage(signal?: AbortSignal): Promise<number | null> {
+  throwIfAborted(signal)
+  const browserNavigator = navigator as ExtendedNavigator
+  const quotaFromEstimate = typeof browserNavigator.storage?.estimate != 'function' ?
+    Promise.resolve(null) :
+		settleWithin(
+			Promise.resolve().then(() => browserNavigator.storage.estimate()),
+			null,
+			signal,
+			).then((estimate) => {
+				const quota = estimate?.quota
+				return typeof quota == 'number' && Number.isFinite(quota) ? quota : null
+			})
+  const legacyStorage = browserNavigator.webkitTemporaryStorage
+  const queryUsageAndQuota = legacyStorage?.queryUsageAndQuota
   const quotaFromLegacyApi = typeof queryUsageAndQuota != 'function' ? Promise.resolve(null) :
-    new Promise<number | null>((resolve) => {
-      queryUsageAndQuota.call(navigator.webkitTemporaryStorage, (_, quota) => {
-        resolve(quota)
-      })
-    }).catch(() => null)
+		settleWithin(new Promise<number | null>((resolve) => {
+			queryUsageAndQuota.call(
+        legacyStorage,
+        (_usage: number, quota: number) => resolve(Number.isFinite(quota) ? quota : null),
+        () => resolve(null),
+			)
+		}), null, signal)
   return Promise.all([
     quotaFromEstimate,
     quotaFromLegacyApi,
   ]).then(([quota1, quota2]) => quota2 ?? quota1)
 }
 
-async function getScriptSize(signal?: AbortSignal): Promise<number | null> {
-  let url = null
+function getScriptSize(): number | null {
+  let url: string
   try {
-    // @ts-expect-error if unsupported
-    url = document?.currentScript?.src || import.meta.url
-  } catch (err) { }
+    const currentScript = document.currentScript
+    const currentScriptSource =
+      currentScript === null ? undefined : Reflect.get(currentScript, 'src')
+    url =
+      typeof currentScriptSource == 'string' && currentScriptSource
+        ? currentScriptSource
+        : import.meta.url
+  } catch {
+    return null
+  }
 
-  if (!url) return null
-  return fetch(url, { signal })
-    .then((res) => res.blob())
-    .then((blob) => blob.size)
-    .catch(() => null)
+  try {
+    if (!url || typeof performance.getEntriesByName != 'function') return null
+    const entries = performance.getEntriesByName(url, 'resource')
+    const entry = entries.at(-1)
+    if (!entry || !('decodedBodySize' in entry)) return null
+    const decodedBodySize: unknown = Reflect.get(entry, 'decodedBodySize')
+    return typeof decodedBodySize == 'number' &&
+      Number.isFinite(decodedBodySize) &&
+      decodedBodySize >= 0
+      ? decodedBodySize
+      : null
+  } catch {
+    return null
+  }
 }
 
 interface Status {
@@ -154,14 +246,15 @@ export async function getStatus(signal?: AbortSignal): Promise<Status> {
     timingRes,
     clientLitter,
   ] = await Promise.all([
-    getBattery(),
-    getStorage(),
-    getStorage(),
-    getScriptSize(signal),
+    getBattery(signal),
+    getStorage(signal),
+    getStorage(signal),
+    getScriptSize(),
     getMaxCallStackSize(),
     getTimingResolution(),
     [...new Set([...getClientLitter(), ...getClientCode()])].sort().slice(0, 50),
   ])
+  throwIfAborted(signal)
 
   // BatteryManager
   const {
@@ -172,28 +265,25 @@ export async function getStatus(signal?: AbortSignal): Promise<Status> {
   } = batteryInfo || {}
 
   // MemoryInfo
-  // @ts-expect-error if not supported
-  const memory = performance?.memory?.jsHeapSizeLimit || null
-  const memoryInGigabytes = memory ? +(memory/GIGABYTE).toFixed(2) : null
+  const memoryValue = (performance as Performance & {
+    memory?: { jsHeapSizeLimit?: unknown }
+  }).memory?.jsHeapSizeLimit
+  const memory = typeof memoryValue == 'number' && Number.isFinite(memoryValue) ? memoryValue : null
+  const memoryInGigabytes = memory == null ? null : +(memory/GIGABYTE).toFixed(2)
 
   // StorageManager
-  const quotaInGigabytes = quotaA ? +(+(quotaA)/GIGABYTE).toFixed(2) : null
+  const quotaInGigabytes = quotaA == null ? null : +(quotaA/GIGABYTE).toFixed(2)
 
   // Network Info
   const {
     downlink, effectiveType, rtt, saveData, downlinkMax, type,
-    // @ts-expect-error if not supported
-  } = navigator?.connection as NetworkInformation & {
-    downlink?: number,
-    effectiveType?: string,
-    rtt?: number,
-    saveData?: boolean,
-    downlinkMax?: number,
-  } || {}
+  } = (navigator as ExtendedNavigator).connection || {}
 
   const scripts: string[] = [
     ...document.querySelectorAll('script'),
-  ].map((x) => x.src.replace(/^https?:\/\//, '')).slice(0, 10)
+  ].map((x) => x.src.replace(/^https?:\/\//, '')).filter(Boolean).slice(0, 10)
+
+  const quotaIsInsecure = quotaA == null || quotaB == null ? null : quotaA !== quotaB
 
   return {
     charging,
@@ -203,7 +293,7 @@ export async function getStatus(signal?: AbortSignal): Promise<Status> {
     memory,
     memoryInGigabytes,
     quota: quotaA,
-    quotaIsInsecure: quotaA !== quotaB,
+    quotaIsInsecure,
     quotaInGigabytes,
     downlink,
     effectiveType,

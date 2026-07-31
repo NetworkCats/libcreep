@@ -23,13 +23,39 @@ const productionFiles = (
   await getFiles(fileURLToPath(new URL('../dist', import.meta.url)))
 ).filter((path) => ['.js', '.map'].includes(extname(path)));
 
+const leakedDeclarationPaths = (
+  await getFiles(fileURLToPath(new URL('../dist', import.meta.url)))
+).filter(
+  (path) =>
+    path.includes(`${join('dist', 'internal')}`) ||
+    path.endsWith('.d.ts.map') ||
+    /(?:runtime|worker)\.d\.ts(?:\.map)?$/.test(path),
+);
+if (leakedDeclarationPaths.length > 0) {
+  throw new Error(
+    `Production output exposes internal or unusable declaration artifacts: ${leakedDeclarationPaths.join(', ')}`,
+  );
+}
+
 const publicEntryPath = fileURLToPath(
   new URL('../dist/index.js', import.meta.url),
 );
 const publicEntry = await readFile(publicEntryPath, 'utf8');
-if (!/new URL\(["']\.\/worker\.js["']/.test(publicEntry)) {
+if (
+  !/new URL\(["']\.\/worker\.js["'],\s*import\.meta\.url\)/.test(publicEntry)
+) {
   throw new Error(
-    'Production output does not reference the packaged dist/worker.js entry',
+    'Production output does not expose a statically bundleable worker URL',
+  );
+}
+
+const workerEntry = await readFile(
+  fileURLToPath(new URL('../dist/worker.js', import.meta.url)),
+  'utf8',
+);
+if (/^\s*import\s/m.test(workerEntry)) {
+  throw new Error(
+    'Production worker entry is not self-contained for downstream asset copying',
   );
 }
 

@@ -33,13 +33,18 @@ interface RuntimeModule {
   ): Promise<FingerprintResult>;
 }
 
+interface OperationCancellation {
+  readonly dispose: () => void;
+  readonly signal?: AbortSignal;
+}
+
 let collectionQueue: Promise<void> = Promise.resolve();
+const MAX_TIMEOUT_MS = 2_147_483_647;
 
 function getAbortReason(signal: AbortSignal): unknown {
-  return (
-    signal.reason ??
-    new DOMException('Fingerprint collection was aborted.', 'AbortError')
-  );
+  return 'reason' in signal
+    ? signal.reason
+    : new DOMException('Fingerprint collection was aborted.', 'AbortError');
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -77,6 +82,21 @@ function rejectWhenAborted<T>(
   });
 }
 
+function isObjectLike(value: unknown): value is object {
+  return (
+    value !== null && (typeof value === 'object' || typeof value === 'function')
+  );
+}
+
+function readPropertySafely(target: unknown, key: PropertyKey): unknown {
+  if (!isObjectLike(target)) return undefined;
+  try {
+    return Reflect.get(target, key);
+  } catch {
+    return undefined;
+  }
+}
+
 function assertBrowserEnvironment(): void {
   if (!isBrowserEnvironment()) {
     throw new TypeError(
@@ -94,34 +114,64 @@ function assertSupported(): void {
   }
 }
 
-async function waitForDocumentBody(): Promise<void> {
+async function waitForDocumentBody(signal?: AbortSignal): Promise<void> {
   if (document.body !== null) return;
 
-  if (document.readyState === 'loading') {
-    await new Promise<void>((resolve) => {
-      document.addEventListener('DOMContentLoaded', () => resolve(), {
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let observer: MutationObserver | undefined;
+    const cleanup = (): void => {
+      document.removeEventListener('DOMContentLoaded', onContentLoaded);
+      signal?.removeEventListener('abort', onAbort);
+      observer?.disconnect();
+    };
+    const finish = (error?: unknown): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error === undefined) resolve();
+      else reject(error);
+    };
+    const checkBody = (): boolean => {
+      if (document.body === null) return false;
+      finish();
+      return true;
+    };
+    const observe = (): void => {
+      if (settled || observer !== undefined || checkBody()) return;
+      try {
+        observer = new MutationObserver(() => {
+          checkBody();
+        });
+        observer.observe(document.documentElement ?? document, {
+          childList: true,
+          subtree: true,
+        });
+        checkBody();
+      } catch (error) {
+        finish(error);
+      }
+    };
+    const onContentLoaded = (): void => {
+      if (!checkBody()) observe();
+    };
+    const onAbort = (): void => {
+      finish(getAbortReason(signal as AbortSignal));
+    };
+
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', onContentLoaded, {
         once: true,
       });
-    });
-    if (document.body !== null) return;
-  }
-
-  await new Promise<void>((resolve) => {
-    let settled = false;
-    const finish = (): void => {
-      if (settled || document.body === null) return;
-      settled = true;
-      observer.disconnect();
-      resolve();
-    };
-    const observer = new MutationObserver(() => {
-      finish();
-    });
-    observer.observe(document.documentElement ?? document, {
-      childList: true,
-      subtree: true,
-    });
-    finish();
+      checkBody();
+    } else {
+      observe();
+    }
   });
 }
 
@@ -129,8 +179,8 @@ function getDefaultWorkerUrl(): string {
   // Keep the worker entry external. Passing import.meta.url directly to
   // new URL() makes Vite treat worker.js as a source asset and inline the
   // unbuilt TypeScript entry instead of referencing dist/worker.js.
-  const moduleUrl = import.meta.url;
-  return new URL('./worker.js', moduleUrl).href;
+  const workerModuleUrl = import.meta.url;
+  return new URL('./worker.js', workerModuleUrl).href;
 }
 
 function getWorkerStrategy(
@@ -147,27 +197,87 @@ function getWorkerStrategy(
   return value;
 }
 
+function validateOperationOptions(options: {
+  readonly timeoutMs?: number;
+}): void {
+  const { timeoutMs } = options;
+  if (
+    timeoutMs !== undefined &&
+    (!Number.isFinite(timeoutMs) || timeoutMs < 0 || timeoutMs > MAX_TIMEOUT_MS)
+  ) {
+    throw new TypeError(
+      `timeoutMs must be a finite number between 0 and ${MAX_TIMEOUT_MS}.`,
+    );
+  }
+}
+
+function createOperationCancellation(
+  signal: AbortSignal | undefined,
+  timeoutMs: number | undefined,
+): OperationCancellation {
+  if (signal === undefined && timeoutMs === undefined) {
+    return { dispose: () => undefined };
+  }
+
+  const controller = new AbortController();
+  const forwardAbort = (): void => {
+    controller.abort(signal?.reason);
+  };
+  signal?.addEventListener('abort', forwardAbort, { once: true });
+  if (signal?.aborted) forwardAbort();
+  const timeout =
+    timeoutMs === undefined || controller.signal.aborted
+      ? undefined
+      : globalThis.setTimeout(() => {
+          controller.abort(
+            new DOMException(
+              `Fingerprint collection timed out after ${timeoutMs}ms.`,
+              'TimeoutError',
+            ),
+          );
+        }, timeoutMs);
+
+  return {
+    signal: controller.signal,
+    dispose(): void {
+      signal?.removeEventListener('abort', forwardAbort);
+      if (timeout !== undefined) globalThis.clearTimeout(timeout);
+    },
+  };
+}
+
 /** Reports whether the current environment is a browser window. */
 export function isBrowserEnvironment(): boolean {
-  return typeof window !== 'undefined' && typeof document !== 'undefined';
+  return (
+    isObjectLike(readPropertySafely(globalThis, 'window')) &&
+    isObjectLike(readPropertySafely(globalThis, 'document'))
+  );
 }
 
 /** Reports the runtime capabilities relevant to fingerprint collection. */
 export function getBrowserCapabilities(): BrowserCapabilities {
   const isBrowser = isBrowserEnvironment();
+  const browserWindow = readPropertySafely(globalThis, 'window');
+  const browserNavigator = readPropertySafely(globalThis, 'navigator');
+  const serviceWorker = readPropertySafely(browserNavigator, 'serviceWorker');
+  const webCrypto = readPropertySafely(globalThis, 'crypto');
+  const subtleCrypto = readPropertySafely(webCrypto, 'subtle');
   return {
-    hasDedicatedWorker: isBrowser && typeof Worker !== 'undefined',
-    hasServiceWorker:
+    hasDedicatedWorker:
       isBrowser &&
-      typeof navigator !== 'undefined' &&
-      'serviceWorker' in navigator,
-    hasSharedWorker: isBrowser && typeof SharedWorker !== 'undefined',
-    hasTextEncoder: typeof TextEncoder !== 'undefined',
+      typeof readPropertySafely(globalThis, 'Worker') === 'function',
+    hasServiceWorker: isBrowser && isObjectLike(serviceWorker),
+    hasSharedWorker:
+      isBrowser &&
+      typeof readPropertySafely(globalThis, 'SharedWorker') === 'function',
+    hasTextEncoder:
+      typeof readPropertySafely(globalThis, 'TextEncoder') === 'function',
     hasWebCrypto:
-      typeof crypto !== 'undefined' &&
-      typeof crypto.subtle?.digest === 'function',
+      typeof readPropertySafely(subtleCrypto, 'digest') === 'function',
     isBrowser,
-    isSecureContext: isBrowser && window.isSecureContext === true,
+    isSecureContext:
+      isBrowser &&
+      readPropertySafely(browserWindow, 'isSecureContext') === true,
   };
 }
 
@@ -181,27 +291,47 @@ export function isFingerprintingSupported(): boolean {
   );
 }
 
-export async function load(
+async function loadCollector(
   options: LoadOptions = {},
+  signal?: AbortSignal,
 ): Promise<FingerprintCollector> {
+  throwIfAborted(signal);
   assertBrowserEnvironment();
   assertSupported();
-  await waitForDocumentBody();
-
-  const runtime = (await import('./runtime.js')) as RuntimeModule;
   const workerUrl = String(options.worker?.url ?? getDefaultWorkerUrl());
   const workerStrategy = getWorkerStrategy(options.worker?.strategy);
   const debug = options.debug ?? false;
+  await waitForDocumentBody(signal);
+  throwIfAborted(signal);
+
+  const runtime = (await rejectWhenAborted(
+    import('./runtime.js'),
+    signal,
+  )) as RuntimeModule;
   return {
     algorithmVersion: ALGORITHM_VERSION,
     libraryVersion: LIBRARY_VERSION,
     collect(
       collectionOptions: CollectionOptions = {},
     ): Promise<FingerprintResult> {
+      let optionSnapshot: CollectionOptions;
+      let cancellation: OperationCancellation;
+      try {
+        optionSnapshot = { ...collectionOptions };
+        validateOperationOptions(optionSnapshot);
+        cancellation = createOperationCancellation(
+          optionSnapshot.signal,
+          optionSnapshot.timeoutMs,
+        );
+      } catch (error) {
+        return Promise.reject(error);
+      }
       const queuedOperation = collectionQueue.then(() => {
-        throwIfAborted(collectionOptions.signal);
+        throwIfAborted(cancellation.signal);
         return runtime.collectFingerprint({
-          ...collectionOptions,
+          ...optionSnapshot,
+          signal: cancellation.signal,
+          timeoutMs: undefined,
           workerStrategy,
           workerUrl,
         });
@@ -210,21 +340,38 @@ export async function load(
         () => undefined,
         () => undefined,
       );
-      const operation = rejectWhenAborted(
-        queuedOperation,
-        collectionOptions.signal,
+      const operation = rejectWhenAborted(queuedOperation, cancellation.signal);
+      const finalizedOperation = operation.then(
+        (result) => {
+          cancellation.dispose();
+          return result;
+        },
+        (error: unknown) => {
+          cancellation.dispose();
+          throw error;
+        },
       );
       if (debug) {
-        void operation.then(
+        void finalizedOperation.then(
           (result) => {
-            console.debug(
-              `[libcreep ${LIBRARY_VERSION}; algorithm ${ALGORITHM_VERSION}]\n${componentsToDebugString(
-                result.components,
-              )}`,
-            );
+            try {
+              console.debug(
+                `[libcreep ${LIBRARY_VERSION}; algorithm ${ALGORITHM_VERSION}]\n${componentsToDebugString(
+                  result.components,
+                )}`,
+              );
+            } catch {
+              // Diagnostics must never affect collection or leak a rejection.
+            }
             if (__LIBCREEP_DEBUG__) {
               void import('./internal/debug/profile.js').then(
-                ({ printSpeedProfile }) => printSpeedProfile(result),
+                ({ printSpeedProfile }) => {
+                  try {
+                    printSpeedProfile(result);
+                  } catch {
+                    // Development profiling is also a detached diagnostic.
+                  }
+                },
                 () => undefined,
               );
             }
@@ -232,17 +379,49 @@ export async function load(
           () => undefined,
         );
       }
-      return operation;
+      return finalizedOperation;
     },
   };
+}
+
+export async function load(
+  options: LoadOptions = {},
+): Promise<FingerprintCollector> {
+  validateOperationOptions(options);
+  const cancellation = createOperationCancellation(
+    options.signal,
+    options.timeoutMs,
+  );
+  try {
+    return await loadCollector(options, cancellation.signal);
+  } finally {
+    cancellation.dispose();
+  }
 }
 
 export async function collect(
   options: CollectOptions = {},
 ): Promise<FingerprintResult> {
   const { debug, worker, ...collectionOptions } = options;
-  const collector = await load({ debug, worker });
-  return collector.collect(collectionOptions);
+  validateOperationOptions(collectionOptions);
+  const cancellation = createOperationCancellation(
+    collectionOptions.signal,
+    collectionOptions.timeoutMs,
+  );
+  try {
+    throwIfAborted(cancellation.signal);
+    const collector = await loadCollector(
+      { debug, worker },
+      cancellation.signal,
+    );
+    return await collector.collect({
+      ...collectionOptions,
+      signal: cancellation.signal,
+      timeoutMs: undefined,
+    });
+  } finally {
+    cancellation.dispose();
+  }
 }
 
 const LibCreep = Object.freeze({

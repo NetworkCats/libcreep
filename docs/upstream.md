@@ -49,7 +49,7 @@ the detector logic recognizable:
 - WebRTC/STUN is opt-in instead of running automatically after rendering;
 - service-worker scope is opt-in, uniquely scoped, and unregistered after use;
 - shared and dedicated module workers form the non-mutating default fallback;
-- the worker is shipped as a separate package entry with its required chunks;
+- the worker is shipped as a separate, self-contained package asset;
 - public component values and results have maintained TypeScript interfaces;
 - canonical raw and algorithm-namespaced stable identifiers are exposed
   separately, together with focused, fuzzy, and bot signals;

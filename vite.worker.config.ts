@@ -1,0 +1,29 @@
+import { defineConfig } from 'vite';
+
+import packageJson from './package.json' with { type: 'json' };
+
+const algorithmVersion = packageJson.fingerprintAlgorithmVersion;
+
+export default defineConfig({
+  define: {
+    __LIBCREEP_DEBUG__: 'false',
+    __LIBCREEP_ALGORITHM_VERSION__: JSON.stringify(algorithmVersion),
+    __LIBCREEP_PACKAGE_VERSION__: JSON.stringify(packageJson.version),
+  },
+  build: {
+    emptyOutDir: false,
+    lib: {
+      entry: 'src/worker.ts',
+      formats: ['es'],
+      fileName: () => 'worker.js',
+    },
+    minify: false,
+    rollupOptions: {
+      output: {
+        codeSplitting: false,
+      },
+    },
+    sourcemap: true,
+    target: 'es2022',
+  },
+});

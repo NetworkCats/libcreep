@@ -1,18 +1,20 @@
-// @ts-nocheck
 import { captureError } from '../errors'
-import { PARENT_PHANTOM } from '../lies'
 
 import { createTimer, logTestResult } from '../utils/helpers'
 export default function getCSS() {
-	const computeStyle = (type, { require: [captureError] }) => {
+	type StyleSource = 'getComputedStyle' | 'HTMLElement.style' | 'CSSRuleList.style'
+	const computeStyle = (
+		type: StyleSource,
+		{ require: [reportError] }: { require: [typeof captureError] },
+	) => {
 		try {
 			// get CSSStyleDeclaration
-			const cssStyleDeclaration = (
+			const firstRule = document.styleSheets[0]?.cssRules[0]
+			const ruleStyle: unknown = firstRule && Reflect.get(firstRule, 'style')
+			const cssStyleDeclaration: CSSStyleDeclaration | undefined = (
 				type == 'getComputedStyle' ? getComputedStyle(document.body) :
 					type == 'HTMLElement.style' ? document.body.style :
-						// @ts-ignore
-						type == 'CSSRuleList.style' ? document.styleSheets[0].cssRules[0].style :
-							undefined
+						ruleStyle instanceof CSSStyleDeclaration ? ruleStyle : undefined
 			)
 			if (!cssStyleDeclaration) {
 				throw new TypeError('invalid argument string')
@@ -20,11 +22,12 @@ export default function getCSS() {
 			// get properties
 			const proto = Object.getPrototypeOf(cssStyleDeclaration)
 			const prototypeProperties = Object.getOwnPropertyNames(proto)
-			const ownEnumerablePropertyNames = []
+			const ownEnumerablePropertyNames: string[] = []
 			const cssVar = /^--.*$/
 			Object.keys(cssStyleDeclaration).forEach((key) => {
 				const numericKey = !isNaN(+key)
-				const value = cssStyleDeclaration[key]
+				const rawValue: unknown = Reflect.get(cssStyleDeclaration, key)
+				const value = typeof rawValue == 'string' ? rawValue : String(rawValue ?? '')
 				const customPropKey = cssVar.test(key)
 				const customPropValue = cssVar.test(value)
 				if (numericKey && !customPropValue) {
@@ -35,11 +38,11 @@ export default function getCSS() {
 				return
 			})
 			// get properties in prototype chain (required only in chrome)
-			const propertiesInPrototypeChain = {}
-			const capitalize = (str) => str.charAt(0).toUpperCase() + str.slice(1)
-			const uncapitalize = (str) => str.charAt(0).toLowerCase() + str.slice(1)
-			const removeFirstChar = (str) => str.slice(1)
-			const caps = /[A-Z]/g
+			const propertiesInPrototypeChain: Record<string, true> = {}
+			const capitalize = (str: string) => str.charAt(0).toUpperCase() + str.slice(1)
+			const uncapitalize = (str: string) => str.charAt(0).toLowerCase() + str.slice(1)
+			const removeFirstChar = (str: string) => str.slice(1)
+			const caps = /[A-Z]/
 			ownEnumerablePropertyNames.forEach((key) => {
 				if (propertiesInPrototypeChain[key]) {
 					return
@@ -65,7 +68,7 @@ export default function getCSS() {
 						propertiesInPrototypeChain[capitalize(aliasAttribute)] = true
 					}
 				} else if (isAliasAttribute) {
-					const namedAttribute = key.replace(caps, (char) => '-' + char.toLowerCase())
+					const namedAttribute = key.replace(/[A-Z]/g, (char) => '-' + char.toLowerCase())
 					if (namedAttribute in cssStyleDeclaration) {
 						propertiesInPrototypeChain[namedAttribute] = true
 					} else if (`-${namedAttribute}` in cssStyleDeclaration) {
@@ -82,17 +85,17 @@ export default function getCSS() {
 					...Object.keys(propertiesInPrototypeChain),
 				]),
 			]
-			// @ts-ignore
-			const interfaceName = ('' + proto).match(/\[object (.+)\]/)[1]
+			const interfaceName = String(proto).match(/\[object (.+)\]/)?.[1] ?? 'CSSStyleDeclaration'
 
 			return { keys, interfaceName }
 		} catch (error) {
-			captureError(error)
+			reportError(error)
 			return
 		}
 	}
 
-	const getSystemStyles = (el) => {
+	const getSystemStyles = () => {
+		let el: HTMLElement | undefined
 		try {
 			const colors = [
 				'ActiveBorder',
@@ -143,7 +146,7 @@ export default function getCSS() {
 				'status-bar',
 			]
 
-			const getStyles = (el) => ({
+			const getStyles = (el: HTMLElement) => ({
 				colors: colors.map((color) => {
 					el.setAttribute('style', `background-color: ${color} !important`)
 					return {
@@ -159,19 +162,15 @@ export default function getCSS() {
 				}),
 			})
 
-			if (!el) {
-				el = document.createElement('div')
-				document.body.append(el)
-				try {
-					return getStyles(el)
-				} finally {
-					el.remove()
-				}
-			}
+			el = document.createElement('div')
+			el.hidden = true
+			document.body.append(el)
 			return getStyles(el)
 		} catch (error) {
 			captureError(error)
 			return
+		} finally {
+			el?.remove()
 		}
 	}
 
@@ -179,7 +178,11 @@ export default function getCSS() {
 		const timer = createTimer()
 		timer.start()
 		const computedStyle = computeStyle('getComputedStyle', { require: [captureError] })
-		const system = getSystemStyles(PARENT_PHANTOM)
+		const system = getSystemStyles()
+		if (computedStyle === undefined && system === undefined) {
+			logTestResult({ test: 'computed style', passed: false })
+			return
+		}
 		logTestResult({ time: timer.stop(), test: 'computed style', passed: true })
 		return {
 			computedStyle,
@@ -188,6 +191,6 @@ export default function getCSS() {
 	} catch (error) {
 		logTestResult({ test: 'computed style', passed: false })
 		captureError(error)
-		return
+		throw error
 	}
 }
