@@ -5,20 +5,24 @@ import {
   throwIfAborted,
   type OperationCancellation,
 } from './cancellation.js';
-import { componentsToDebugString, hashComponents } from './hash.js';
-import type {
-  BrowserCapabilities,
-  CollectionOptions,
-  CollectOptions,
-  FingerprintCollector,
-  FingerprintResult,
-  LoadOptions,
-  WorkerStrategy,
+import { LibCreepError } from './errors.js';
+import { componentsToDebugString } from './hash.js';
+import {
+  OPT_IN_AUXILIARY_COMPONENT_NAMES,
+  type BrowserCapabilities,
+  type CollectorCollectOptions,
+  type CollectOptions,
+  type FingerprintCollector,
+  type FingerprintResult,
+  type LoadOptions,
+  type OptInAuxiliaryComponentName,
+  type WorkerStrategy,
 } from './types.js';
 import { ALGORITHM_VERSION, LIBRARY_VERSION } from './version.js';
 
 declare const __LIBCREEP_DEBUG__: boolean;
 
+export { LibCreepError, type LibCreepErrorCode } from './errors.js';
 export { componentsToDebugString, hashComponents } from './hash.js';
 export {
   AUXILIARY_COMPONENT_NAMES,
@@ -33,7 +37,7 @@ export { ALGORITHM_VERSION, LIBRARY_VERSION } from './version.js';
 
 interface RuntimeModule {
   collectFingerprint(
-    options: CollectionOptions & {
+    options: CollectorCollectOptions & {
       workerStrategy: WorkerStrategy;
       workerUrl: string;
     },
@@ -59,7 +63,8 @@ function readPropertySafely(target: unknown, key: PropertyKey): unknown {
 
 function assertBrowserEnvironment(): void {
   if (!isBrowserEnvironment()) {
-    throw new TypeError(
+    throw new LibCreepError(
+      'NOT_BROWSER',
       'libcreep can collect fingerprints only in a browser window.',
     );
   }
@@ -68,7 +73,8 @@ function assertBrowserEnvironment(): void {
 function assertSupported(): void {
   const capabilities = getBrowserCapabilities();
   if (!capabilities.hasWebCrypto || !capabilities.hasTextEncoder) {
-    throw new TypeError(
+    throw new LibCreepError(
+      'UNSUPPORTED_ENVIRONMENT',
       'libcreep requires the Web Crypto and TextEncoder APIs.',
     );
   }
@@ -152,13 +158,34 @@ function getWorkerStrategy(
     value !== 'dedicated-only' &&
     value !== 'service-first'
   ) {
-    throw new TypeError(`Unknown worker strategy: ${String(value)}`);
+    throw new LibCreepError(
+      'INVALID_OPTION',
+      `Unknown worker strategy: ${String(value)}`,
+    );
   }
   return value;
 }
 
-/** Reports whether the current environment is a browser window. */
-export function isBrowserEnvironment(): boolean {
+function getOptIn(
+  optIn: ReadonlyArray<OptInAuxiliaryComponentName> | undefined,
+): ReadonlyArray<OptInAuxiliaryComponentName> {
+  if (optIn === undefined) return [];
+  if (!Array.isArray(optIn)) {
+    throw new LibCreepError('INVALID_OPTION', 'optIn must be an array.');
+  }
+  const names: ReadonlyArray<string> = OPT_IN_AUXILIARY_COMPONENT_NAMES;
+  for (const name of optIn) {
+    if (!names.includes(name)) {
+      throw new LibCreepError(
+        'INVALID_OPTION',
+        `Unknown opt-in component: ${String(name)}`,
+      );
+    }
+  }
+  return Object.freeze([...new Set(optIn)]);
+}
+
+function isBrowserEnvironment(): boolean {
   return (
     isObjectLike(readPropertySafely(globalThis, 'window')) &&
     isObjectLike(readPropertySafely(globalThis, 'document'))
@@ -223,12 +250,13 @@ async function loadCollector(
     algorithmVersion: ALGORITHM_VERSION,
     libraryVersion: LIBRARY_VERSION,
     collect(
-      collectionOptions: CollectionOptions = {},
+      collectionOptions: CollectorCollectOptions = {},
     ): Promise<FingerprintResult> {
-      let optionSnapshot: CollectionOptions;
+      let optionSnapshot: CollectorCollectOptions;
       let cancellation: OperationCancellation;
       try {
-        optionSnapshot = { ...collectionOptions };
+        const options = { ...collectionOptions };
+        optionSnapshot = { ...options, optIn: getOptIn(options.optIn) };
         cancellation = createOperationCancellation(
           optionSnapshot.signal,
           optionSnapshot.timeoutMs,
@@ -294,6 +322,7 @@ async function loadCollector(
   };
 }
 
+/** Loads the detector runtime and returns a reusable collector. */
 export async function load(
   options: LoadOptions = {},
 ): Promise<FingerprintCollector> {
@@ -308,10 +337,12 @@ export async function load(
   }
 }
 
+/** Loads the detector runtime and performs one collection. */
 export async function collect(
   options: CollectOptions = {},
 ): Promise<FingerprintResult> {
   const { debug, worker, ...collectionOptions } = options;
+  const optIn = getOptIn(collectionOptions.optIn);
   const cancellation = createOperationCancellation(
     collectionOptions.signal,
     collectionOptions.timeoutMs,
@@ -324,6 +355,7 @@ export async function collect(
     );
     return await collector.collect({
       ...collectionOptions,
+      optIn,
       signal: cancellation.signal,
       timeoutMs: undefined,
     });
@@ -331,17 +363,3 @@ export async function collect(
     cancellation.dispose();
   }
 }
-
-const LibCreep = Object.freeze({
-  algorithmVersion: ALGORITHM_VERSION,
-  collect,
-  componentsToDebugString,
-  getBrowserCapabilities,
-  hashComponents,
-  isBrowserEnvironment,
-  isFingerprintingSupported,
-  load,
-  libraryVersion: LIBRARY_VERSION,
-});
-
-export default LibCreep;

@@ -1,17 +1,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import LibCreep, {
-  ALGORITHM_VERSION,
+import * as LibCreep from '../src/index.js';
+import {
   AUXILIARY_COMPONENT_NAMES,
   BOT_RULE_NAMES,
   collect,
   CORE_COMPONENT_NAMES,
   DEFAULT_AUXILIARY_COMPONENT_NAMES,
   getBrowserCapabilities,
-  isBrowserEnvironment,
   isFingerprintingSupported,
+  LibCreepError,
   load,
-  LIBRARY_VERSION,
   OPT_IN_AUXILIARY_COMPONENT_NAMES,
 } from '../src/index.js';
 
@@ -21,16 +20,47 @@ afterEach(() => {
 
 describe('server-side import safety', () => {
   it('imports without touching browser globals', () => {
-    expect(isBrowserEnvironment()).toBe(false);
     expect(isFingerprintingSupported()).toBe(false);
     expect(getBrowserCapabilities().isBrowser).toBe(false);
-    expect(LibCreep.libraryVersion).toBe(LIBRARY_VERSION);
-    expect(LibCreep.algorithmVersion).toBe(ALGORITHM_VERSION);
+  });
+
+  it('exposes only named exports', () => {
+    expect(Object.keys(LibCreep).sort()).toEqual([
+      'ALGORITHM_VERSION',
+      'AUXILIARY_COMPONENT_NAMES',
+      'BOT_RULE_NAMES',
+      'CORE_COMPONENT_NAMES',
+      'DEFAULT_AUXILIARY_COMPONENT_NAMES',
+      'LIBRARY_VERSION',
+      'LibCreepError',
+      'OPT_IN_AUXILIARY_COMPONENT_NAMES',
+      'collect',
+      'componentsToDebugString',
+      'getBrowserCapabilities',
+      'hashComponents',
+      'isFingerprintingSupported',
+      'load',
+    ]);
   });
 
   it('fails clearly when collection is attempted outside a browser', async () => {
     await expect(load()).rejects.toThrow(/only in a browser window/);
     await expect(collect()).rejects.toThrow(/only in a browser window/);
+    await expect(load()).rejects.toBeInstanceOf(LibCreepError);
+    await expect(collect()).rejects.toMatchObject({
+      code: 'NOT_BROWSER',
+      name: 'LibCreepError',
+    });
+  });
+
+  it('reports missing minimum APIs with a dedicated error code', async () => {
+    vi.stubGlobal('window', {});
+    vi.stubGlobal('document', {});
+    vi.stubGlobal('crypto', { subtle: {} });
+
+    await expect(load()).rejects.toMatchObject({
+      code: 'UNSUPPORTED_ENVIRONMENT',
+    });
   });
 
   it('rejects incomplete Web Crypto implementations', () => {
@@ -58,8 +88,8 @@ describe('server-side import safety', () => {
     vi.stubGlobal('window', null);
     vi.stubGlobal('document', null);
 
-    expect(isBrowserEnvironment()).toBe(false);
     expect(getBrowserCapabilities().isBrowser).toBe(false);
+    expect(isFingerprintingSupported()).toBe(false);
   });
 
   it('treats restricted capability getters as unavailable', () => {
@@ -103,7 +133,7 @@ describe('component manifest', () => {
     expect(new Set(CORE_COMPONENT_NAMES).size).toBe(
       CORE_COMPONENT_NAMES.length,
     );
-    expect(CORE_COMPONENT_NAMES).toContain('lies');
+    expect(CORE_COMPONENT_NAMES).toContain('apiTampering');
     expect(CORE_COMPONENT_NAMES).toContain('workerScope');
     expect(CORE_COMPONENT_NAMES).toContain('canvasWebgl');
   });
@@ -125,7 +155,7 @@ describe('component manifest', () => {
     expect(DEFAULT_AUXILIARY_COMPONENT_NAMES).toEqual([
       'mediaCapabilities',
       'mediaDevices',
-      'status',
+      'browserStatus',
     ]);
     expect(OPT_IN_AUXILIARY_COMPONENT_NAMES).toEqual(['webRtc']);
     expect(AUXILIARY_COMPONENT_NAMES).toEqual([

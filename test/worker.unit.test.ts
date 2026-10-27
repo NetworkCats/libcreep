@@ -67,7 +67,7 @@ describe('worker transport cleanup', () => {
     });
 
     const result = await pendingResult;
-    expect(result?.languages).toEqual(['en-US']);
+    expect(result).toMatchObject({ languages: ['en-US'] });
     expect(terminate).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -101,7 +101,7 @@ describe('worker transport cleanup', () => {
     );
     await vi.runAllTimersAsync();
 
-    await expect(result).resolves.toBeUndefined();
+    await expect(result).resolves.toEqual({ reason: 'worker-unavailable' });
     expect(terminate).toHaveBeenCalledOnce();
   });
 
@@ -141,7 +141,7 @@ describe('worker transport cleanup', () => {
     const result = getBestWorkerScope('/worker.js', 'auto', undefined);
     await vi.runAllTimersAsync();
 
-    await expect(result).resolves.toBeUndefined();
+    await expect(result).resolves.toEqual({ reason: 'worker-unavailable' });
     expect(close).toHaveBeenCalledOnce();
   });
 
@@ -200,7 +200,7 @@ describe('worker transport cleanup', () => {
     );
     await vi.runAllTimersAsync();
 
-    await expect(result).resolves.toBeUndefined();
+    await expect(result).resolves.toEqual({ reason: 'worker-unavailable' });
     expect(register).toHaveBeenCalledOnce();
     expect(removeEventListener).toHaveBeenCalledWith(
       'message',
@@ -252,7 +252,7 @@ describe('worker transport cleanup', () => {
     expect(finished).toBe(false);
 
     await vi.advanceTimersByTimeAsync(1_000);
-    await expect(result).resolves.toBeUndefined();
+    await expect(result).resolves.toEqual({ reason: 'worker-unavailable' });
     expect(finished).toBe(true);
 
     resolveRegistration({
@@ -290,7 +290,7 @@ describe('worker transport cleanup', () => {
     const result = getBestWorkerScope('/worker.js', 'service-first', undefined);
     await vi.advanceTimersByTimeAsync(1_000);
 
-    await expect(result).resolves.toBeUndefined();
+    await expect(result).resolves.toEqual({ reason: 'worker-unavailable' });
     expect(unregister).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
   });

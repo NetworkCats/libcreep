@@ -124,7 +124,7 @@ Three auxiliary probes run by default:
 - `mediaDevices` calls `enumerateDevices()` without requesting camera or
   microphone permission, then returns sorted device kinds only. It does not
   return labels or device IDs.
-- `status` collects available battery, storage quota, network, timing, stack,
+- `browserStatus` collects available battery, storage quota, network, timing, stack,
   passive script resource-size metadata, and client-global information.
 
 Their results live under `result.auxiliary` and are not included in
@@ -138,7 +138,7 @@ WebRTC collection is opt-in:
 
 ```ts
 const result = await collector.collect({
-  includeWebRtc: true,
+  optIn: ['webRtc'],
   timeoutMs: 10_000,
 });
 ```

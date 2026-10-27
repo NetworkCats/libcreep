@@ -1,12 +1,22 @@
-import libcreep, {
+import {
   collect,
+  LibCreepError,
   load,
-  type CollectionOptions,
+  type BotRule,
+  type CollectorCollectOptions,
   type FingerprintCollector,
   type FingerprintResult,
+  type LibCreepErrorCode,
+  type UnsupportedReason,
 } from 'libcreep';
 
-const options: CollectionOptions = { includeWebRtc: false };
+const options: CollectorCollectOptions = { optIn: ['webRtc'] };
+// @ts-expect-error WebRTC is enabled through `optIn`.
+const legacyOptions: CollectorCollectOptions = { includeWebRtc: true };
+// @ts-expect-error Only opt-in auxiliary component names are accepted.
+const invalidOptIn: CollectorCollectOptions = { optIn: ['status'] };
+void legacyOptions;
+void invalidOptIn;
 const collector: Promise<FingerprintCollector> = load();
 const cancelledLoad: Promise<FingerprintCollector> = load({
   signal: new AbortController().signal,
@@ -41,14 +51,14 @@ void result.then((fingerprint) => {
     const apps: ReadonlyArray<string> = fontsResult.value.apps;
     void apps;
   }
-  const featuresResult = fingerprint.components.features;
+  const featuresResult = fingerprint.components.engineFeatures;
   if (featuresResult.status === 'fulfilled') {
     const keys: ReadonlyArray<string> = featuresResult.value.jsFeaturesKeys;
     const features: ReadonlyArray<string> = featuresResult.value.jsFeatures;
     void features;
     void keys;
   }
-  const resistanceResult = fingerprint.components.resistance;
+  const resistanceResult = fingerprint.components.privacyResistance;
   if (resistanceResult.status === 'fulfilled') {
     const hashes: Readonly<Record<string, string>> | undefined =
       resistanceResult.value.extensionHashPattern;
@@ -101,11 +111,43 @@ void result.then((fingerprint) => {
       navigatorResult.value.permissions;
     const plugins = navigatorResult.value.plugins;
     const webgpu = navigatorResult.value.webgpu;
+    const lied: boolean = navigatorResult.value.lied;
+    // @ts-expect-error Navigator fields are closed, so typos do not type-check.
+    void navigatorResult.value.userAgnet;
+    // @ts-expect-error User-Agent Client Hints fields are closed as well.
+    void navigatorResult.value.userAgentData?.platfrom;
+    void lied;
     void parsed;
     void permissions;
     void plugins;
     void webgpu;
   }
+  const webglResult = fingerprint.components.canvasWebgl;
+  if (webglResult.status === 'unsupported') {
+    const reason: UnsupportedReason | undefined = webglResult.reason;
+    void reason;
+  }
+  const workerScopeLies = fingerprint.values.workerScope?.lies.proto;
+  const matchedRules: ReadonlyArray<BotRule> = fingerprint.bot.matchedRules;
+  const systemFonts = fingerprint.stableComponents.cssSystemFonts;
+  const fontFaceFonts: ReadonlyArray<string> | undefined =
+    fingerprint.stableComponents.fontFaceLoadFonts;
+  const browserStatus = fingerprint.auxiliary.browserStatus;
+  if (browserStatus.status === 'fulfilled') {
+    const stackSize: number = browserStatus.value.stackSize;
+    void stackSize;
+  }
+  const webRtc = fingerprint.auxiliary.webRtc;
+  if (webRtc.status === 'fulfilled') {
+    const address: string | undefined = webRtc.value.address;
+    void address;
+  }
+  // @ts-expect-error Component keys use descriptive names, not Creep.js names.
+  void fingerprint.components.lies;
+  void fontFaceFonts;
+  void matchedRules;
+  void systemFonts;
+  void workerScopeLies;
   // @ts-expect-error The ambiguous pre-v4 result field was removed.
   void fingerprint.version;
   void durationMs;
@@ -119,6 +161,12 @@ void collector.then((loadedCollector) => {
   void version;
 });
 
-void libcreep;
+void result.catch((error: unknown) => {
+  if (error instanceof LibCreepError) {
+    const code: LibCreepErrorCode = error.code;
+    void code;
+  }
+});
+
 void collector;
 void result;

@@ -2,6 +2,7 @@ import { attempt, captureError } from '../errors'
 import { lieProps, PHANTOM_DARKNESS } from '../lies'
 import { sendToTrash, getWebGLRendererConfidence, compressWebGLRenderer } from '../trash'
 import { hashMini } from '../utils/crypto'
+import { unsupported } from '../utils/unsupported'
 import { IS_WEBKIT, createTimer, queueEvent, LIKE_BRAVE, logTestResult, LowerEntropy, getGpuBrand, Analysis } from '../utils/helpers'
 
 type WebGLContext = WebGLRenderingContext | WebGL2RenderingContext
@@ -302,7 +303,7 @@ export default async function getCanvasWebgl() {
 		gl2 = context2.context
 		if (!gl) {
 			logTestResult({ test: 'webgl', passed: false })
-			return
+			return unsupported('api-unavailable')
 		}
 		const primaryGl = gl
 

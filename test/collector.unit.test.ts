@@ -4,8 +4,9 @@ import {
   ALGORITHM_VERSION,
   collect,
   load,
+  LibCreepError,
   LIBRARY_VERSION,
-  type CollectionOptions,
+  type CollectorCollectOptions,
   type FingerprintResult,
 } from '../src/index.js';
 import { printSpeedProfile } from '../src/internal/debug/profile.js';
@@ -57,7 +58,7 @@ describe('fingerprint collector orchestration', () => {
       worker: { strategy: 'dedicated-only', url: workerUrl },
     });
 
-    const first = collector.collect({ includeWebRtc: true });
+    const first = collector.collect({ optIn: ['webRtc', 'webRtc'] });
     const secondOptions = { timeoutMs: 250 };
     const second = collector.collect(secondOptions);
     secondOptions.timeoutMs = 999;
@@ -66,7 +67,7 @@ describe('fingerprint collector orchestration', () => {
       expect(mockedCollectFingerprint).toHaveBeenCalledOnce(),
     );
     expect(mockedCollectFingerprint).toHaveBeenNthCalledWith(1, {
-      includeWebRtc: true,
+      optIn: ['webRtc'],
       signal: undefined,
       timeoutMs: undefined,
       workerStrategy: 'dedicated-only',
@@ -77,6 +78,7 @@ describe('fingerprint collector orchestration', () => {
     await expect(first).resolves.toBe(fingerprint);
     await expect(second).resolves.toBe(fingerprint);
     expect(mockedCollectFingerprint).toHaveBeenNthCalledWith(2, {
+      optIn: [],
       signal: expect.any(AbortSignal),
       timeoutMs: undefined,
       workerStrategy: 'dedicated-only',
@@ -200,7 +202,7 @@ describe('fingerprint collector orchestration', () => {
     await expect(
       collect({
         debug: false,
-        includeWebRtc: true,
+        optIn: ['webRtc'],
         signal,
         timeoutMs: 500,
         worker: {
@@ -210,7 +212,7 @@ describe('fingerprint collector orchestration', () => {
       }),
     ).resolves.toBe(fingerprint);
     expect(mockedCollectFingerprint).toHaveBeenCalledWith({
-      includeWebRtc: true,
+      optIn: ['webRtc'],
       signal: expect.any(AbortSignal),
       timeoutMs: undefined,
       workerStrategy: 'service-first',
@@ -227,6 +229,25 @@ describe('fingerprint collector orchestration', () => {
         },
       }),
     ).rejects.toThrow('Unknown worker strategy: typo');
+    await expect(
+      load({ worker: { strategy: 'typo' as 'auto' } }),
+    ).rejects.toMatchObject({ code: 'INVALID_OPTION', name: 'LibCreepError' });
+    expect(mockedCollectFingerprint).not.toHaveBeenCalled();
+  });
+
+  it('rejects unknown opt-in components before collecting', async () => {
+    const collector = await load();
+    const invalid = { optIn: ['typo'] } as unknown as CollectorCollectOptions;
+
+    await expect(collector.collect(invalid)).rejects.toThrow(
+      'Unknown opt-in component: typo',
+    );
+    await expect(
+      collector.collect({ optIn: 'webRtc' as unknown as ['webRtc'] }),
+    ).rejects.toThrow('optIn must be an array.');
+    const oneShot = collect(invalid);
+    await expect(oneShot).rejects.toBeInstanceOf(LibCreepError);
+    await expect(oneShot).rejects.toMatchObject({ code: 'INVALID_OPTION' });
     expect(mockedCollectFingerprint).not.toHaveBeenCalled();
   });
 
@@ -247,6 +268,9 @@ describe('fingerprint collector orchestration', () => {
     await expect(collector.collect({ timeoutMs: -1 })).rejects.toThrow(
       'timeoutMs must be a finite number between 0 and 2147483647.',
     );
+    await expect(collector.collect({ timeoutMs: -1 })).rejects.toMatchObject({
+      code: 'INVALID_OPTION',
+    });
     await expect(
       collector.collect({ timeoutMs: 2_147_483_648 }),
     ).rejects.toThrow(
@@ -261,7 +285,7 @@ describe('fingerprint collector orchestration', () => {
   it('returns a rejected promise when collection options cannot be read', async () => {
     const collector = await load();
     const reason = new TypeError('blocked option enumeration');
-    const options = new Proxy({} as CollectionOptions, {
+    const options = new Proxy({} as CollectorCollectOptions, {
       ownKeys: () => {
         throw reason;
       },

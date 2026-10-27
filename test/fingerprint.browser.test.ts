@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import {
   ALGORITHM_VERSION,
+  BOT_RULE_NAMES,
   componentsToDebugString,
   CORE_COMPONENT_NAMES,
   hashComponents,
@@ -14,7 +15,9 @@ import { hashValue } from '../src/hash.js';
 import {
   buildFocusedHashes,
   buildStableFingerprint,
+  normalizeLieFlags,
   snapshot,
+  toUpstreamFingerprint,
 } from '../src/runtime.js';
 
 let result: FingerprintResult;
@@ -32,7 +35,7 @@ beforeAll(async () => {
     worker: { strategy: 'auto', url: '/dist/worker.js' },
   });
   result = await collector.collect();
-  webRtcResult = await collector.collect({ includeWebRtc: true });
+  webRtcResult = await collector.collect({ optIn: ['webRtc'] });
 });
 
 describe('frontend API', () => {
@@ -42,6 +45,10 @@ describe('frontend API', () => {
     expect(result.rawVisitorId).toMatch(/^[a-f\d]{64}$/);
     expect(result.fuzzyHash).toMatch(/^[a-f\d0]{64}$/);
     expect(result.bot.botMask).toMatch(/^[01]{8}$/);
+    expect(result.bot.matchedRules).toEqual(
+      BOT_RULE_NAMES.filter((_, index) => result.bot.botMask[index] === '1'),
+    );
+    expect(result.bot.firstMatchedRule).toBe(result.bot.matchedRules[0]);
     expect(result.durationMs).toBeGreaterThan(0);
     expect(result.algorithmVersion).toBe(ALGORITHM_VERSION);
     expect(result.libraryVersion).toBe(LIBRARY_VERSION);
@@ -76,10 +83,70 @@ describe('frontend API', () => {
     expect(rejected).toEqual([]);
   });
 
+  it('publishes lie flags as booleans', () => {
+    for (const [name, value] of Object.entries(result.values)) {
+      for (const key of [
+        'lied',
+        'liedTextMetrics',
+        'parameterOrExtensionLie',
+      ]) {
+        if (!Object.hasOwn(value, key)) continue;
+        expect(typeof Reflect.get(value, key), `${name}.${key}`).toBe(
+          'boolean',
+        );
+      }
+    }
+  });
+
+  it('normalizes numeric lie counts without changing their truthiness', () => {
+    const results = {
+      canvasWebgl: {
+        durationMs: 1,
+        status: 'fulfilled',
+        value: { lied: 3, parameterOrExtensionLie: 0 },
+      },
+      screen: { durationMs: 1, status: 'unsupported' },
+    } as const;
+    const mutable: Parameters<typeof normalizeLieFlags>[0] = { ...results };
+
+    normalizeLieFlags(mutable);
+
+    expect(mutable.canvasWebgl).toEqual({
+      durationMs: 1,
+      status: 'fulfilled',
+      value: { lied: true, parameterOrExtensionLie: false },
+    });
+    expect(mutable.screen).toBe(results.screen);
+  });
+
+  it('feeds Creep.js component names to the ported fuzzy and bot rules', () => {
+    expect(
+      Object.keys(
+        toUpstreamFingerprint({
+          anomalies: {},
+          apiTampering: {},
+          engineFeatures: {},
+          htmlElementProperties: {},
+          math: {},
+          navigator: {},
+          privacyResistance: {},
+        } as never),
+      ).sort(),
+    ).toEqual([
+      'features',
+      'htmlElementVersion',
+      'lies',
+      'maths',
+      'navigator',
+      'resistance',
+      'trash',
+    ]);
+  });
+
   it('collects passive auxiliary detections without configuration', () => {
     expect(result.auxiliary.mediaDevices.status).not.toBe('skipped');
     expect(result.auxiliary.mediaCapabilities.status).not.toBe('skipped');
-    expect(result.auxiliary.status.status).not.toBe('skipped');
+    expect(result.auxiliary.browserStatus.status).not.toBe('skipped');
     expect(result.auxiliary.webRtc.status).toBe('skipped');
   });
 
@@ -102,7 +169,10 @@ describe('frontend API', () => {
     });
     const noWorkerResult = await collector.collect();
 
-    expect(noWorkerResult.components.workerScope.status).toBe('unsupported');
+    expect(noWorkerResult.components.workerScope).toMatchObject({
+      reason: 'worker-unavailable',
+      status: 'unsupported',
+    });
     expect(noWorkerResult.values.navigator?.platform).toBe(navigator.platform);
     expect(noWorkerResult.values.navigator?.userAgent).toBe(
       navigator.userAgent.trim().replace(/\s{2,}/, ' '),
@@ -362,7 +432,7 @@ describe('frontend API', () => {
       const collector = await load({
         worker: { strategy: 'auto', url: '/dist/worker.js' },
       });
-      const isolatedResult = await collector.collect({ includeWebRtc: true });
+      const isolatedResult = await collector.collect({ optIn: ['webRtc'] });
       expect(isolatedResult.auxiliary.webRtc.status).toBe('rejected');
     } finally {
       RTCPeerConnection.prototype.createOffer = createOffer;
@@ -411,8 +481,10 @@ describe('frontend API', () => {
     expect(webRtcResult.values.capturedErrors).toEqual(
       result.values.capturedErrors,
     );
-    expect(webRtcResult.values.lies).toEqual(result.values.lies);
-    expect(webRtcResult.values.trash).toEqual(result.values.trash);
+    expect(webRtcResult.values.apiTampering).toEqual(
+      result.values.apiTampering,
+    );
+    expect(webRtcResult.values.anomalies).toEqual(result.values.anomalies);
   });
 
   it('cancels queued and active collection', async () => {
@@ -425,7 +497,7 @@ describe('frontend API', () => {
       collector.collect({ signal: controller.signal }),
     ).rejects.toMatchObject({ name: 'AbortError' });
     await expect(
-      collector.collect({ includeWebRtc: true, timeoutMs: 1 }),
+      collector.collect({ optIn: ['webRtc'], timeoutMs: 1 }),
     ).rejects.toMatchObject({ name: 'TimeoutError' });
   });
 
@@ -473,16 +545,16 @@ const upstreamCoverage: ReadonlyArray<
   readonly [string, ReadonlyArray<(typeof CORE_COMPONENT_NAMES)[number]>]
 > = [
   ['workers', ['workerScope']],
-  ['iframes', ['lies', 'headless']],
+  ['iframes', ['apiTampering', 'headless']],
   ['fonts', ['fonts']],
   ['timezone', ['timezone', 'intl']],
-  ['window', ['windowFeatures', 'htmlElementVersion']],
+  ['window', ['windowFeatures', 'htmlElementProperties']],
   ['screen', ['screen', 'cssMedia']],
-  ['prototype and proxy', ['lies']],
+  ['prototype and proxy', ['apiTampering']],
   ['DOMRect and emojis', ['clientRects', 'svg', 'canvas2d']],
-  ['math', ['maths', 'consoleErrors']],
+  ['math', ['math', 'consoleErrors']],
   ['machine', ['navigator', 'canvasWebgl']],
-  ['extensions', ['resistance', 'features']],
+  ['extensions', ['privacyResistance', 'engineFeatures']],
 ];
 
 const optionallyUnsupported = new Set<(typeof CORE_COMPONENT_NAMES)[number]>([

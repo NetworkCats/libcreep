@@ -1,3 +1,6 @@
+import type { WebRTCComponent } from '../../types'
+import { unsupported, type Unsupported } from '../utils/unsupported'
+
 const settleWithin = <T>(operation: PromiseLike<T>, label: string, limit: number = 3000): Promise<T> =>
 	new Promise((resolve, reject) => {
 		let settled = false
@@ -22,8 +25,8 @@ const settleWithin = <T>(operation: PromiseLike<T>, label: string, limit: number
 		)
 	})
 
-export async function getWebRTCDevices(): Promise<MediaDeviceKind[] | null> {
-	if (!navigator?.mediaDevices?.enumerateDevices) return null
+export async function getWebRTCDevices(): Promise<MediaDeviceKind[] | Unsupported> {
+	if (!navigator?.mediaDevices?.enumerateDevices) return unsupported('api-unavailable')
 	return settleWithin(navigator.mediaDevices.enumerateDevices(), 'Media device enumeration').then((devices) => {
 		return devices.map((device) => device.kind).sort()
 	})
@@ -50,7 +53,7 @@ const getMediaConfig = (
 })
 
 export const getMediaCapabilities = async () => {
-	if (typeof navigator?.mediaCapabilities?.decodingInfo != 'function') return null
+	if (typeof navigator?.mediaCapabilities?.decodingInfo != 'function') return unsupported('api-unavailable')
 	const video = {
 		width: 1920,
 		height: 1080,
@@ -235,13 +238,13 @@ const getIPAddress = (sdp?: string): string | undefined => {
 	return candidateIpAddress && candidateIpAddress != blocked ? candidateIpAddress : undefined
 }
 
-export default async function getWebRTCData(signal?: AbortSignal): Promise<Record<string, unknown> | null> {
-	if (!window.RTCPeerConnection) return null
+export default async function getWebRTCData(signal?: AbortSignal): Promise<WebRTCComponent | Unsupported | null> {
+	if (!window.RTCPeerConnection) return unsupported('api-unavailable')
 	if (signal?.aborted) {
 		throw signal.reason ?? new DOMException('WebRTC detection was aborted.', 'AbortError')
 	}
 
-	return new Promise<Record<string, unknown> | null>((resolve, reject) => {
+	return new Promise<WebRTCComponent | null>((resolve, reject) => {
 		const config: RTCConfiguration = {
 			iceCandidatePoolSize: 1,
 			iceServers: [
@@ -270,7 +273,7 @@ export default async function getWebRTCData(signal?: AbortSignal): Promise<Recor
 			} catch {}
 		}
 		const finish = (
-			value: Record<string, unknown> | null | undefined,
+			value: WebRTCComponent | null | undefined,
 			error?: unknown,
 			rejected: boolean = false,
 		) => {

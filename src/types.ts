@@ -4,7 +4,7 @@ export const CORE_COMPONENT_NAMES = [
   'navigator',
   'windowFeatures',
   'headless',
-  'htmlElementVersion',
+  'htmlElementProperties',
   'cssMedia',
   'css',
   'screen',
@@ -12,26 +12,26 @@ export const CORE_COMPONENT_NAMES = [
   'media',
   'canvas2d',
   'canvasWebgl',
-  'maths',
+  'math',
   'consoleErrors',
   'timezone',
   'clientRects',
   'offlineAudioContext',
   'fonts',
-  'lies',
-  'trash',
+  'apiTampering',
+  'anomalies',
   'capturedErrors',
   'svg',
-  'resistance',
+  'privacyResistance',
   'intl',
-  'features',
+  'engineFeatures',
 ] as const;
 
 /** Names of the auxiliary components collected by default. */
 export const DEFAULT_AUXILIARY_COMPONENT_NAMES = [
   'mediaCapabilities',
   'mediaDevices',
-  'status',
+  'browserStatus',
 ] as const;
 
 /** Names of auxiliary components that require explicit opt-in. */
@@ -45,15 +45,15 @@ export const AUXILIARY_COMPONENT_NAMES = [
 
 export type CoreComponentName = (typeof CORE_COMPONENT_NAMES)[number];
 export type AuxiliaryComponentName = (typeof AUXILIARY_COMPONENT_NAMES)[number];
+export type OptInAuxiliaryComponentName =
+  (typeof OPT_IN_AUXILIARY_COMPONENT_NAMES)[number];
 
 export interface ComponentHash {
   readonly $hash: string;
 }
 
-export type LieFlag = boolean | number;
-
+/** Low- and high-entropy User-Agent Client Hints, with compressed brands. */
 export interface UserAgentData {
-  readonly [key: string]: unknown;
   readonly architecture?: string;
   readonly bitness?: string;
   readonly brands?: ReadonlyArray<string>;
@@ -66,7 +66,6 @@ export interface UserAgentData {
 }
 
 export interface GPUInfo {
-  readonly [key: string]: unknown;
   readonly compressedGPU?: string;
   readonly confidence?: 'high' | 'moderate' | 'low';
   readonly gibbers?: string;
@@ -87,21 +86,25 @@ export interface WebGPUInfo {
   readonly limits: Readonly<Record<string, number>>;
 }
 
+/** Lies detected inside the worker scope, keyed by the inconsistency found. */
+export interface WorkerScopeLies {
+  /** Prototype lies by API, or `false` when none were found. */
+  readonly proto: false | Readonly<Record<string, ReadonlyArray<string>>>;
+  readonly engine?: string;
+  readonly os?: string;
+  readonly platformVersion?: string;
+  readonly version?: string;
+}
+
 export interface WorkerScopeComponent extends ComponentHash {
-  readonly [key: string]: unknown;
   readonly device?: string;
   readonly deviceMemory?: number;
   readonly gpu?: GPUInfo;
   readonly hardwareConcurrency?: number;
   readonly language?: string;
   readonly languages?: ReadonlyArray<string>;
-  readonly lied?: LieFlag;
-  readonly lies?: Readonly<
-    Record<
-      string,
-      string | false | Readonly<Record<string, ReadonlyArray<string>>>
-    >
-  >;
+  readonly lied: boolean;
+  readonly lies: WorkerScopeLies;
   readonly locale?: string;
   readonly localeEntropyIsTrusty?: boolean;
   readonly localeIntlEntropyIsTrusty?: boolean;
@@ -122,7 +125,6 @@ export interface WorkerScopeComponent extends ComponentHash {
 }
 
 export interface NavigatorComponent extends ComponentHash {
-  readonly [key: string]: unknown;
   readonly appVersion?: string;
   readonly bluetoothAvailability?: boolean;
   readonly device?: string;
@@ -132,7 +134,7 @@ export interface NavigatorComponent extends ComponentHash {
   readonly hardwareConcurrency?: number;
   readonly language?: string;
   readonly languages?: ReadonlyArray<string>;
-  readonly lied: LieFlag;
+  readonly lied: boolean;
   readonly maxTouchPoints?: number | null;
   readonly mimeTypes?: ReadonlyArray<string>;
   readonly oscpu?: string;
@@ -162,7 +164,10 @@ export interface HeadlessComponent extends ComponentHash {
   readonly headlessRating: number;
   readonly likeHeadless: Readonly<Record<string, boolean>>;
   readonly likeHeadlessRating: number;
-  readonly platformEstimate: ReadonlyArray<unknown>;
+  /** Blink-only platform scores and the highest score; empty elsewhere. */
+  readonly platformEstimate:
+    | readonly []
+    | readonly [scores: Readonly<Record<string, number>>, highestScore: number];
   readonly stealth: Readonly<Record<string, boolean>>;
   readonly stealthRating: number;
   readonly systemFonts: string;
@@ -198,7 +203,7 @@ export interface ScreenComponent extends ComponentHash {
   readonly availWidth: number;
   readonly colorDepth: number;
   readonly height: number;
-  readonly lied: LieFlag;
+  readonly lied: boolean;
   readonly pixelDepth: number;
   readonly touch: boolean;
   readonly width: number;
@@ -208,7 +213,7 @@ export interface VoicesComponent extends ComponentHash {
   readonly defaultVoiceLang: string;
   readonly defaultVoiceName: string;
   readonly languages: ReadonlyArray<string>;
-  readonly lied: LieFlag;
+  readonly lied: boolean;
   readonly local: ReadonlyArray<string>;
   readonly remote: ReadonlyArray<string>;
 }
@@ -229,8 +234,8 @@ export interface Canvas2DComponent extends ComponentHash {
   readonly dataURI: string;
   readonly emojiSet: ReadonlyArray<string>;
   readonly emojiURI: string;
-  readonly lied: LieFlag;
-  readonly liedTextMetrics?: LieFlag;
+  readonly lied: boolean;
+  readonly liedTextMetrics?: boolean;
   readonly mods?: Readonly<{
     pixelImage: string;
     pixels?: number;
@@ -242,20 +247,34 @@ export interface Canvas2DComponent extends ComponentHash {
   readonly textURI: string;
 }
 
+/** A serialized `getParameter()`, context-attribute, or precision value. */
+export type WebGLParameterValue =
+  boolean | number | string | null | undefined | ReadonlyArray<number>;
+
 export interface CanvasWebGLComponent extends ComponentHash {
   readonly dataURI?: string;
   readonly dataURI2?: string;
   readonly extensions: ReadonlyArray<string>;
   readonly gpu: GPUInfo;
-  readonly lied: LieFlag;
-  readonly parameterOrExtensionLie?: LieFlag;
-  readonly parameters: Readonly<Record<string, unknown>>;
+  readonly lied: boolean;
+  readonly parameterOrExtensionLie?: boolean;
+  readonly parameters: Readonly<Record<string, WebGLParameterValue>>;
   readonly pixels?: string;
   readonly pixels2?: string;
 }
 
+/** One Math expression result and the engines whose output it matches. */
+export interface MathExpressionResult {
+  readonly chrome: boolean;
+  readonly firefox: boolean;
+  readonly result: number | ReadonlyArray<number>;
+  readonly safari: boolean;
+  readonly torBrowser: boolean;
+}
+
 export interface MathComponent extends ComponentHash {
-  readonly data: Readonly<Record<string, unknown>>;
+  /** Results keyed by expression; `undefined` when an expression threw. */
+  readonly data: Readonly<Record<string, MathExpressionResult | undefined>>;
   readonly lied: boolean;
 }
 
@@ -264,7 +283,7 @@ export interface ConsoleErrorsComponent extends ComponentHash {
 }
 
 export interface TimezoneComponent extends ComponentHash {
-  readonly lied: LieFlag;
+  readonly lied: boolean;
   readonly location?: string;
   readonly locationEpoch: number;
   readonly locationMeasured?: string;
@@ -280,7 +299,7 @@ export interface ClientRectsComponent extends ComponentHash {
   >;
   readonly elementClientRects: ReadonlyArray<Readonly<Record<string, number>>>;
   readonly emojiSet: ReadonlyArray<string>;
-  readonly lied: LieFlag;
+  readonly lied: boolean;
   readonly rangeBoundingClientRect: ReadonlyArray<
     Readonly<Record<string, number>>
   >;
@@ -293,18 +312,19 @@ export interface OfflineAudioContextComponent extends ComponentHash {
   readonly copySample: ReadonlyArray<number | undefined>;
   readonly floatFrequencyDataSum: number;
   readonly floatTimeDomainDataSum: number;
-  readonly lied: LieFlag;
+  readonly lied: boolean;
   readonly noise: number;
   readonly sampleSum: number;
   readonly totalUniqueSamples: number;
-  readonly values: Readonly<Record<string, unknown>>;
+  /** Audio node properties keyed by `Interface.property` path. */
+  readonly values: Readonly<Record<string, number | string | undefined>>;
 }
 
 export interface FontsComponent extends ComponentHash {
   readonly apps: ReadonlyArray<string>;
   readonly emojiSet: ReadonlyArray<string>;
   readonly fontFaceLoadFonts: ReadonlyArray<string>;
-  readonly lied: LieFlag;
+  readonly lied: boolean;
   readonly pixelSizeSystemSum: number;
   readonly platformVersion?: string;
 }
@@ -314,12 +334,25 @@ export interface ApiTamperingComponent extends ComponentHash {
   readonly totalLies: number;
 }
 
+export interface AnomalyEntry {
+  /** API or signal in which the anomaly was found. */
+  readonly name: string;
+  /** Description of the anomaly, or the untrusted value that caused it. */
+  readonly value: unknown;
+}
+
 export interface AnomaliesComponent extends ComponentHash {
-  readonly trashBin: ReadonlyArray<unknown>;
+  readonly trashBin: ReadonlyArray<AnomalyEntry>;
+}
+
+/** A detector error, reduced to fields that are stable across engines. */
+export interface CapturedError {
+  readonly trustedMessage?: string;
+  readonly trustedName?: string;
 }
 
 export interface CapturedErrorsComponent extends ComponentHash {
-  readonly data: ReadonlyArray<unknown>;
+  readonly data: ReadonlyArray<CapturedError>;
 }
 
 export interface SVGComponent extends ComponentHash {
@@ -327,7 +360,7 @@ export interface SVGComponent extends ComponentHash {
   readonly computedTextLength: number;
   readonly emojiSet: ReadonlyArray<string>;
   readonly extentOfChar: number;
-  readonly lied: LieFlag;
+  readonly lied: boolean;
   readonly subStringLength: number;
   readonly svgrectSystemSum: number;
 }
@@ -344,7 +377,7 @@ export interface PrivacyResistanceComponent extends ComponentHash {
 export interface IntlComponent extends ComponentHash {
   readonly dateTimeFormat?: string;
   readonly displayNames?: string;
-  readonly lied: LieFlag;
+  readonly lied: boolean;
   readonly listFormat?: string;
   readonly locale: string;
   readonly numberFormat?: string;
@@ -374,7 +407,7 @@ export interface CoreComponentValues {
   readonly navigator?: NavigatorComponent;
   readonly windowFeatures?: WindowFeaturesComponent;
   readonly headless?: HeadlessComponent;
-  readonly htmlElementVersion?: HTMLElementPropertiesComponent;
+  readonly htmlElementProperties?: HTMLElementPropertiesComponent;
   readonly cssMedia?: CSSMediaComponent;
   readonly css?: CSSComponent;
   readonly screen?: ScreenComponent;
@@ -382,19 +415,19 @@ export interface CoreComponentValues {
   readonly media?: MediaComponent;
   readonly canvas2d?: Canvas2DComponent;
   readonly canvasWebgl?: CanvasWebGLComponent;
-  readonly maths?: MathComponent;
+  readonly math?: MathComponent;
   readonly consoleErrors?: ConsoleErrorsComponent;
   readonly timezone?: TimezoneComponent;
   readonly clientRects?: ClientRectsComponent;
   readonly offlineAudioContext?: OfflineAudioContextComponent;
   readonly fonts?: FontsComponent;
-  readonly lies?: ApiTamperingComponent;
-  readonly trash?: AnomaliesComponent;
+  readonly apiTampering?: ApiTamperingComponent;
+  readonly anomalies?: AnomaliesComponent;
   readonly capturedErrors?: CapturedErrorsComponent;
   readonly svg?: SVGComponent;
-  readonly resistance?: PrivacyResistanceComponent;
+  readonly privacyResistance?: PrivacyResistanceComponent;
   readonly intl?: IntlComponent;
-  readonly features?: EngineFeaturesComponent;
+  readonly engineFeatures?: EngineFeaturesComponent;
 }
 
 export interface ComponentError {
@@ -402,6 +435,16 @@ export interface ComponentError {
   readonly name: string;
   readonly stack?: string;
 }
+
+/**
+ * Known cause of an `unsupported` result. It is absent when a detector
+ * produced no value without reporting why.
+ */
+export type UnsupportedReason =
+  /** A browser API that the detector requires is missing. */
+  | 'api-unavailable'
+  /** No selected worker transport produced a usable worker scope. */
+  | 'worker-unavailable';
 
 export type ComponentResult<T> =
   | {
@@ -411,6 +454,7 @@ export type ComponentResult<T> =
     }
   | {
       readonly durationMs: number;
+      readonly reason?: UnsupportedReason;
       readonly status: 'unsupported';
     }
   | {
@@ -452,10 +496,12 @@ export interface StableComponentValues {
   readonly canvas2d: Partial<Omit<Canvas2DComponent, '$hash'>>;
   readonly canvasWebgl: Partial<Omit<CanvasWebGLComponent, '$hash'>>;
   readonly cssMedia: StableCSSMediaComponent;
-  readonly css: NonNullable<NonNullable<CSSComponent['system']>['fonts']>;
+  /** CSS system fonts (`css.system.fonts`). */
+  readonly cssSystemFonts: CSSSystemValues;
   readonly timezone: Partial<Omit<TimezoneComponent, '$hash'>>;
   readonly offlineAudioContext: Omit<OfflineAudioContextComponent, '$hash'>;
-  readonly fonts: FontsComponent['fontFaceLoadFonts'];
+  /** Fonts confirmed through `FontFace` loading (`fonts.fontFaceLoadFonts`). */
+  readonly fontFaceLoadFonts: FontsComponent['fontFaceLoadFonts'];
 }
 
 export type StableComponentName = keyof StableComponentValues;
@@ -494,6 +540,8 @@ export interface BotDetectionResult {
   readonly botMask: string;
   /** First matching client-side rule, if any. */
   readonly firstMatchedRule?: BotRule;
+  /** Every matching client-side rule, in bot-mask order. */
+  readonly matchedRules: ReadonlyArray<BotRule>;
 }
 
 export interface BrowserStatus {
@@ -519,13 +567,42 @@ export interface BrowserStatus {
   readonly type?: string;
 }
 
+/** Decoding support flags keyed by media MIME type and codec. */
+export type MediaCapabilitiesComponent = Readonly<
+  Record<string, ReadonlyArray<'efficient' | 'smooth'>>
+>;
+
+/** Sorted kinds of the available media input and output devices. */
+export type MediaDevicesComponent = ReadonlyArray<MediaDeviceKind>;
+
+/** One codec parsed from the WebRTC offer SDP. */
+export interface WebRTCCodec {
+  readonly channels?: number;
+  readonly clockRates?: ReadonlyArray<number>;
+  readonly feedbackSupport?: ReadonlyArray<string>;
+  readonly mimeType?: string;
+  readonly sdpFmtpLine?: ReadonlyArray<string>;
+}
+
+/** WebRTC SDP and ICE signals; address fields need a STUN candidate. */
+export interface WebRTCComponent {
+  readonly address?: string;
+  readonly codecsSdp?: Readonly<{
+    audio?: ReadonlyArray<WebRTCCodec>;
+    video?: ReadonlyArray<WebRTCCodec>;
+  }>;
+  readonly extensions?: ReadonlyArray<string>;
+  readonly foundation: string;
+  readonly foundationProp?: string | null;
+  readonly iceCandidate: string;
+  readonly stunConnection?: string;
+}
+
 export interface AuxiliaryComponentValues {
-  readonly mediaCapabilities: Readonly<
-    Record<string, ReadonlyArray<'efficient' | 'smooth'>>
-  >;
-  readonly mediaDevices: ReadonlyArray<MediaDeviceKind>;
-  readonly status: BrowserStatus;
-  readonly webRtc: Readonly<Record<string, unknown>>;
+  readonly mediaCapabilities: MediaCapabilitiesComponent;
+  readonly mediaDevices: MediaDevicesComponent;
+  readonly browserStatus: BrowserStatus;
+  readonly webRtc: WebRTCComponent;
 }
 
 export type AuxiliaryComponentResults = {
@@ -539,14 +616,19 @@ export interface FingerprintResult {
   readonly visitorId: string;
   /** Hash of all raw Creep.js components, including unstable entropy. */
   readonly rawVisitorId: string;
+  /** 64-character similarity signature; not a cryptographic identifier. */
   readonly fuzzyHash: string;
+  /** Client-side bot rules that matched this collection. */
   readonly bot: BotDetectionResult;
   /** Status, timing, and value or error for every core detection. */
   readonly components: CoreComponentResults;
   /** Successful core detection values, provided for convenient data access. */
   readonly values: CoreComponentValues;
+  /** The exact trust-filtered values hashed into `visitorId`. */
   readonly stableComponents: StableFingerprint;
+  /** SHA-256 hashes of narrower signal groups that were available. */
   readonly focusedHashes: FocusedHashes;
+  /** Probes excluded from `visitorId` and `rawVisitorId`. */
   readonly auxiliary: AuxiliaryComponentResults;
   /** Total collection time in milliseconds. */
   readonly durationMs: number;
@@ -565,49 +647,46 @@ export interface WorkerOptions {
   readonly strategy?: WorkerStrategy;
 }
 
-export interface LoadOptions {
+/** Settings fixed when a collector is created and applied to every call. */
+export interface CollectorConfig {
   /** Print a structured collection report after each successful call. */
   readonly debug?: boolean;
-  /** Cancels document readiness and runtime loading when aborted. */
-  readonly signal?: AbortSignal;
-  /** Cancels loading after up to 2,147,483,647ms. */
-  readonly timeoutMs?: number;
   /** Configure the isolated worker used by the worker-scope detection. */
   readonly worker?: WorkerOptions;
 }
 
-export interface CollectionOptions {
+export interface LoadOptions extends CollectorConfig {
+  /** Cancels document readiness and runtime loading only, not later calls. */
+  readonly signal?: AbortSignal;
+  /** Cancels loading only, after up to 2,147,483,647ms. */
+  readonly timeoutMs?: number;
+}
+
+export interface CollectorCollectOptions {
   /**
-   * Use STUN to collect WebRTC SDP and address signals. This can disclose
-   * network information and add up to several seconds, so it is opt-in.
+   * Opt-in auxiliary probes to run. `webRtc` uses STUN to collect SDP and
+   * address signals; it can disclose network information and add up to
+   * several seconds.
    */
-  readonly includeWebRtc?: boolean;
+  readonly optIn?: ReadonlyArray<OptInAuxiliaryComponentName>;
   /** Cancels a queued or active collection and its detector resources. */
   readonly signal?: AbortSignal;
   /** Cancels queueing or active collection after up to 2,147,483,647ms. */
   readonly timeoutMs?: number;
 }
 
-export interface CollectOptions {
-  /** Print a structured collection report after a successful call. */
-  readonly debug?: boolean;
-  /**
-   * Use STUN to collect WebRTC SDP and address signals. This can disclose
-   * network information and add up to several seconds, so it is opt-in.
-   */
-  readonly includeWebRtc?: boolean;
+export interface CollectOptions
+  extends CollectorConfig, CollectorCollectOptions {
   /** Cancels one-shot loading, queueing, and active detector resources. */
   readonly signal?: AbortSignal;
   /** Cancels the full one-shot operation after up to 2,147,483,647ms. */
   readonly timeoutMs?: number;
-  /** Configure the isolated worker used by the worker-scope detection. */
-  readonly worker?: WorkerOptions;
 }
 
 export interface FingerprintCollector {
   readonly algorithmVersion: string;
   readonly libraryVersion: string;
-  collect(options?: CollectionOptions): Promise<FingerprintResult>;
+  collect(options?: CollectorCollectOptions): Promise<FingerprintResult>;
 }
 
 export interface BrowserCapabilities {

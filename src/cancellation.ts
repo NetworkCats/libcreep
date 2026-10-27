@@ -1,3 +1,5 @@
+import { LibCreepError } from './errors.js';
+
 /** @internal Shared abort and timeout plumbing for the API and runtime. */
 export interface OperationCancellation {
   readonly dispose: () => void;
@@ -52,7 +54,8 @@ export function validateTimeout(timeoutMs: number | undefined): void {
     timeoutMs !== undefined &&
     (!Number.isFinite(timeoutMs) || timeoutMs < 0 || timeoutMs > MAX_TIMEOUT_MS)
   ) {
-    throw new TypeError(
+    throw new LibCreepError(
+      'INVALID_OPTION',
       `timeoutMs must be a finite number between 0 and ${MAX_TIMEOUT_MS}.`,
     );
   }

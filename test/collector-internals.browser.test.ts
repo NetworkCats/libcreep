@@ -25,6 +25,7 @@ import {
   createMeasurementFragment,
   replaceElement,
 } from '../src/internal/utils/measurement.js';
+import { Unsupported } from '../src/internal/utils/unsupported.js';
 import getCanvasWebgl from '../src/internal/webgl/index.js';
 import {
   drainDetectorActivity,
@@ -271,14 +272,14 @@ describe('WebGL serialization', () => {
     );
 
     const data = await getCanvasWebgl();
-    if (!data) return;
+    if (!data || data instanceof Unsupported) return;
     expect(getAttribLocation).toHaveBeenCalled();
     expect(enableVertexAttribArray).toHaveBeenCalledWith(3);
   });
 
   it('uses deterministic extension and pixel arrays', async () => {
     const data = await getCanvasWebgl();
-    if (!data) return;
+    if (!data || data instanceof Unsupported) return;
 
     expect(data.extensions).toEqual([...data.extensions].sort());
     expect(new Set(data.extensions).size).toBe(data.extensions.length);

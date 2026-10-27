@@ -11,7 +11,9 @@ Every name in `CORE_COMPONENT_NAMES` has an entry in `result.components`, even
 when its browser API is unavailable. Entries are independent:
 
 - `fulfilled` includes the value, duration, and a component `$hash`;
-- `unsupported` means the probe produced no usable value;
+- `unsupported` means the probe produced no usable value. When the cause is
+  known, `reason` is `'api-unavailable'` (a required browser API is missing)
+  or `'worker-unavailable'` (no worker transport produced a worker scope);
 - `rejected` captures the probe error while other probes continue;
 - `skipped` represents an intentional policy skip. It is currently used for
   opt-in WebRTC, not for the always-attempted core manifest.
@@ -24,43 +26,49 @@ component is not necessarily retained as a usable `stableComponents` input.
 
 Every core component is attempted by `collector.collect()`.
 
-| Component             | Main signals                                                     |
-| --------------------- | ---------------------------------------------------------------- |
-| `workerScope`         | Worker navigator, locale, timezone, UA-CH, WebGL, prototype lies |
-| `navigator`           | UA, platform, hardware, permissions, plugins, Bluetooth, WebGPU  |
-| `windowFeatures`      | Window/global feature keys                                       |
-| `headless`            | Headless, stealth, automation, and platform inconsistencies      |
-| `htmlElementVersion`  | `HTMLElement` property surface                                   |
-| `cssMedia`            | Media preferences, pointer/hover, gamut, screen queries          |
-| `css`                 | Computed/system styles, system colors, and system fonts          |
-| `screen`              | Screen/available geometry, color/pixel depth, touch, DPR checks  |
-| `voices`              | Speech synthesis voices and languages                            |
-| `media`               | MIME and playback/recording support                              |
-| `canvas2d`            | Image, paint, text, emoji, pixels, and text metrics              |
-| `canvasWebgl`         | WebGL images, pixels, extensions, parameters, and GPU            |
-| `maths`               | JavaScript math-runtime signatures                               |
-| `consoleErrors`       | JavaScript engine error signatures                               |
-| `timezone`            | Offset, zone, measured location, and epoch signature             |
-| `clientRects`         | Element/range DOMRect and emoji geometry                         |
-| `offlineAudioContext` | Audio samples, compressor, analyser, and noise                   |
-| `fonts`               | Font availability, metrics, emoji, apps, and platform version    |
-| `lies`                | Prototype tampering and API lie records                          |
-| `trash`               | Invalid/inconsistent values captured by other probes             |
-| `capturedErrors`      | Trusted error names and messages from blocked APIs               |
-| `svg`                 | SVG text and geometry measurements                               |
-| `resistance`          | Tor, Firefox RFP, Brave, and extension privacy patterns          |
-| `intl`                | Locale-sensitive `Intl` constructors and lie checks              |
-| `features`            | JavaScript, DOM, CSS, and Window engine/version features         |
+| Component               | Main signals                                                     |
+| ----------------------- | ---------------------------------------------------------------- |
+| `workerScope`           | Worker navigator, locale, timezone, UA-CH, WebGL, prototype lies |
+| `navigator`             | UA, platform, hardware, permissions, plugins, Bluetooth, WebGPU  |
+| `windowFeatures`        | Window/global feature keys                                       |
+| `headless`              | Headless, stealth, automation, and platform inconsistencies      |
+| `htmlElementProperties` | `HTMLElement` property surface                                   |
+| `cssMedia`              | Media preferences, pointer/hover, gamut, screen queries          |
+| `css`                   | Computed/system styles, system colors, and system fonts          |
+| `screen`                | Screen/available geometry, color/pixel depth, touch, DPR checks  |
+| `voices`                | Speech synthesis voices and languages                            |
+| `media`                 | MIME and playback/recording support                              |
+| `canvas2d`              | Image, paint, text, emoji, pixels, and text metrics              |
+| `canvasWebgl`           | WebGL images, pixels, extensions, parameters, and GPU            |
+| `math`                  | JavaScript math-runtime signatures                               |
+| `consoleErrors`         | JavaScript engine error signatures                               |
+| `timezone`              | Offset, zone, measured location, and epoch signature             |
+| `clientRects`           | Element/range DOMRect and emoji geometry                         |
+| `offlineAudioContext`   | Audio samples, compressor, analyser, and noise                   |
+| `fonts`                 | Font availability, metrics, emoji, apps, and platform version    |
+| `apiTampering`          | Prototype tampering and API lie records                          |
+| `anomalies`             | Invalid/inconsistent values captured by other probes             |
+| `capturedErrors`        | Trusted error names and messages from blocked APIs               |
+| `svg`                   | SVG text and geometry measurements                               |
+| `privacyResistance`     | Tor, Firefox RFP, Brave, and extension privacy patterns          |
+| `intl`                  | Locale-sensitive `Intl` constructors and lie checks              |
+| `engineFeatures`        | JavaScript, DOM, CSS, and Window engine/version features         |
 
-The `features.*Version` and `versionRange` fields are estimates from pinned
+Six components use descriptive names instead of their Creep.js names; see
+[Upstream adaptation](./upstream.md#component-names) for the mapping.
+
+The `engineFeatures.*Version` and `versionRange` fields are estimates from pinned
 feature maps, not exact browser-version reports. The current maps end at
 Chrome 115 and Firefox 112; newer engines report terminal lower bounds such as
 `115+` or `112+` rather than claiming those map endpoints as exact versions.
 
-Many component interfaces expose common, useful fields explicitly and retain
-additional upstream data where a detector is intentionally open-ended. Consult
-the generated TypeScript declarations for the field-level value shapes. Always
-narrow the component status before reading its value.
+Component interfaces list every field a detector reports, so a misspelled
+field is a type error. Records whose keys come from the browser, such as WebGL
+parameters, Math expressions, and audio node properties, are typed by their
+value shapes. Every `lied` field (and `liedTextMetrics` and
+`parameterOrExtensionLie`) is a boolean. Consult the generated TypeScript
+declarations for field-level shapes, and always narrow the component status
+before reading its value.
 
 ## Auxiliary detections
 
@@ -71,20 +79,20 @@ Auxiliary probes live in `result.auxiliary`. They do not contribute to
 | ------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `mediaCapabilities` | Yes     | Supported fixed audio/video codec configurations, with available `smooth` and `efficient` flags. Returns `unsupported` when `MediaCapabilities.decodingInfo` is absent.                         |
 | `mediaDevices`      | Yes     | Sorted media-device kinds from `enumerateDevices()`. It requests no camera/microphone permission and returns neither labels nor device IDs.                                                     |
-| `status`            | Yes     | Available battery, storage quota, network, timing resolution, stack size, passive script resource-size metadata, and client-global information. Individual fields can be `null` or `undefined`. |
+| `browserStatus`     | Yes     | Available battery, storage quota, network, timing resolution, stack size, passive script resource-size metadata, and client-global information. Individual fields can be `null` or `undefined`. |
 | `webRtc`            | No      | SDP codecs/extensions, ICE candidate data, and a network address when available. Contacts external STUN servers and can take roughly three seconds.                                             |
 
 Enable WebRTC explicitly:
 
 ```ts
-const result = await collector.collect({ includeWebRtc: true });
+const result = await collector.collect({ optIn: ['webRtc'] });
 
 if (result.auxiliary.webRtc.status === 'fulfilled') {
   console.log(result.auxiliary.webRtc.value);
 }
 ```
 
-Without the option, the `webRtc` entry is present with `status: 'skipped'` and
+Without `'webRtc'` in `optIn`, the `webRtc` entry is present with `status: 'skipped'` and
 `durationMs: 0`.
 
 ## Worker-scope transport policy
@@ -101,7 +109,8 @@ const collector = await load({
 });
 ```
 
-If every transport fails, `components.workerScope` is `unsupported` while the
+If every transport fails, `components.workerScope` is `unsupported` with
+`reason: 'worker-unavailable'` while the
 remaining core and auxiliary probes continue. See
 [Browser runtime and workers](./browser-runtime.md) for deployment and cleanup
 details.

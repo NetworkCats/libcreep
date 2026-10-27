@@ -41,8 +41,8 @@ one-shot loading, document readiness, the queue wait, and active collection.
 1. The runtime resets captured errors, lie records, anomaly records, entropy
    flags, analysis state, and the hidden phantom DOM to a clean baseline.
 2. Passive auxiliary probes start concurrently with the core collection.
-   WebRTC joins them only when `includeWebRtc` is true; otherwise its result is
-   immediately marked `skipped`.
+   WebRTC joins them only when `optIn` contains `'webRtc'`; otherwise its result
+   is immediately marked `skipped`.
 3. Brave privacy mode is detected when applicable.
 4. Nineteen independent core probes start concurrently, including the worker,
    rendering, media, geometry, font, locale, and engine probes.
@@ -50,7 +50,9 @@ one-shot loading, document readiness, the queue wait, and active collection.
    between the window and worker scopes.
 6. Headless and engine-feature probes run concurrently after their required
    inputs are available.
-7. Lie, anomaly (`trash`), and captured-error records are finalized.
+7. API-tampering (`apiTampering`), anomaly (`anomalies`), and captured-error
+   records are finalized, and every detector `lied` flag is normalized to a
+   boolean.
 8. Successful core values receive canonical component `$hash` fields, and
    focused hashes are calculated canonically from usable raw values.
 9. Trust and stability rules build an independently snapshotted
@@ -68,12 +70,13 @@ report this overlap explicitly.
 
 Core and auxiliary detectors run through wrappers that convert a normal probe
 exception into a `rejected` component result and convert `null`/`undefined`
-into `unsupported`. This lets the remaining fingerprint survive a blocked or
-missing browser API.
+into `unsupported`. A detector that knows why it has no value returns an
+internal marker instead, which becomes `unsupported` with a public `reason`.
+This lets the remaining fingerprint survive a blocked or missing browser API.
 
 Collection-level failures still reject the promise. These include unsupported
-minimum runtime requirements, cancellation, timeout, and failures in
-orchestration or final hashing. Abort-related errors thrown by a detector are
+minimum runtime requirements and invalid options (both `LibCreepError`),
+cancellation, timeout, and failures in orchestration or final hashing. Abort-related errors thrown by a detector are
 treated as component failures unless the collection's own signal is actually
 aborted.
 
@@ -149,11 +152,14 @@ available.
 
 `fuzzyHash` is a 64-character similarity signature derived from many known
 metrics. It is designed for approximate comparison and is not a cryptographic
-hash or stable visitor identifier.
+hash or stable visitor identifier. Its metric bins are defined by Creep.js
+component names, so the runtime passes it, and the bot rules, a view of the
+values keyed by those upstream names.
 
 The bot mask is an eight-rule ordered bitset. Six rules use client-side data;
 the excessive-loose-fingerprint and low-crowd-blending rules remain `0` because
-they require server history or crowd analysis. An unavailable worker scope is
+they require server history or crowd analysis. `bot.matchedRules` lists every
+matching rule in mask order, so consumers do not need to decode the bitset. An unavailable worker scope is
 one of the client-side heuristics, so applications must treat the bot output as
 a signal rather than a verdict.
 

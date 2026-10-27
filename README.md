@@ -40,7 +40,7 @@ Most detections run by default. WebRTC address detection is opt-in because it
 contacts STUN servers and may reveal network information:
 
 ```ts
-const result = await collector.collect({ includeWebRtc: true });
+const result = await collector.collect({ optIn: ['webRtc'] });
 ```
 
 ## Documentation

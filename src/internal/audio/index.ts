@@ -1,6 +1,7 @@
 import { attempt, caniuse, captureError } from '../errors'
 import { lieProps, documentLie } from '../lies'
 import { sendToTrash } from '../trash'
+import { unsupported } from '../utils/unsupported'
 
 import { createTimer, queueEvent, logTestResult, LowerEntropy } from '../utils/helpers'
 
@@ -93,7 +94,7 @@ export default async function getOfflineAudioContext(signal?: AbortSignal) {
 
 		if (typeof OfflineAudioContextCtor != 'function') {
 			logTestResult({test: 'audio', passed: false})
-			return
+			return unsupported('api-unavailable')
 		}
 
 		// detect lies

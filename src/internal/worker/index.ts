@@ -15,6 +15,7 @@ import {
 	getReportedPlatform,
 } from '../utils/helpers'
 import type { WorkerStrategy } from '../../types'
+import { unsupported } from '../utils/unsupported'
 
 interface UserAgentBrand {
 	brand: string
@@ -587,7 +588,7 @@ export default async function getBestWorkerScope(
 			if (workerScope?.userAgent) break
 		}
 		if (!workerScope?.userAgent) {
-			return
+			return unsupported('worker-unavailable')
 		}
 		workerScope.system = getOS(workerScope.userAgent)
 		workerScope.device = getUserAgentPlatform({

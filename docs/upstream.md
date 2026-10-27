@@ -46,14 +46,35 @@ the detector logic recognizable:
 - module-level detector records are reset between collections;
 - long-lived worker, WebRTC, audio, status, and DOM work participates in public
   abort/timeout cleanup;
-- WebRTC/STUN is opt-in instead of running automatically after rendering;
+- WebRTC/STUN is opt-in (`optIn: ['webRtc']`) instead of running
+  automatically after rendering;
 - service-worker scope is opt-in, uniquely scoped, and unregistered after use;
 - shared and dedicated module workers form the non-mutating default fallback;
 - the worker is shipped as a separate, self-contained package asset;
 - public component values and results have maintained TypeScript interfaces;
 - canonical raw and algorithm-namespaced stable identifiers are exposed
   separately, together with focused, fuzzy, and bot signals;
-- debug serialization replaces the upstream report UI.
+- debug serialization replaces the upstream report UI;
+- detector `lied` flags are published as booleans, although several upstream
+  detectors report the first lying API's lie count as a number.
+
+## Component names
+
+Six components and two stable groups use descriptive names instead of the
+upstream fingerprint keys. The fuzzy hash and bot rules still read the ported
+data under the upstream keys, so their bin layout and rule logic are unchanged.
+
+| libcreep                             | Creep.js                         |
+| ------------------------------------ | -------------------------------- |
+| `components.apiTampering`            | `lies`                           |
+| `components.anomalies`               | `trash`                          |
+| `components.math`                    | `maths`                          |
+| `components.htmlElementProperties`   | `htmlElementVersion`             |
+| `components.privacyResistance`       | `resistance`                     |
+| `components.engineFeatures`          | `features`                       |
+| `stableComponents.cssSystemFonts`    | stable `css` (system fonts)      |
+| `stableComponents.fontFaceLoadFonts` | stable `fonts` (`FontFace` list) |
+| `auxiliary.browserStatus`            | `status`                         |
 
 A few detector expressions that are inert in upstream because of source
 defects are evaluated as upstream evidently intended:

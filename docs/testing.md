@@ -141,8 +141,8 @@ JavaScript and source maps so a build fails if profiler markers remain.
 The upstream exploratory browser-test areas are mapped to automated assertions
 inside `fingerprint.browser.test.ts`: workers, iframes, fonts, timezone,
 window/HTML surfaces, screen/media queries, prototype/proxy checks,
-DOMRect/emojis, math/engine errors, machine/WebGL, and extension/resistance
-signals.
+DOMRect/emojis, math/engine errors, machine/WebGL, and extension/privacy
+resistance signals.
 
 ## Continuous integration
 

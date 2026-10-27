@@ -36,6 +36,7 @@ describe('bot detection', () => {
     expect(result).toEqual({
       botMask: '00101000',
       firstMatchedRule: 'functionToStringHasProxy',
+      matchedRules: ['functionToStringHasProxy', 'extremeLieCount'],
     });
   });
 
@@ -45,7 +46,7 @@ describe('bot detection', () => {
       botImports,
     );
 
-    expect(result).toEqual({ botMask: '00000000' });
+    expect(result).toEqual({ botMask: '00000000', matchedRules: [] });
   });
 });
 

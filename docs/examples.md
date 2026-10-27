@@ -35,7 +35,7 @@ import { collect } from 'libcreep';
 
 const result = await collect({
   debug: false,
-  includeWebRtc: false,
+  optIn: [],
   timeoutMs: 10_000,
   worker: { strategy: 'auto' },
 });
@@ -115,13 +115,14 @@ const canvas = result.components.canvas2d;
 switch (canvas.status) {
   case 'fulfilled':
     console.log('Canvas hash:', canvas.value.$hash);
-    console.log('Canvas reported a lie:', Boolean(canvas.value.lied));
+    console.log('Canvas reported a lie:', canvas.value.lied);
     break;
   case 'rejected':
     console.warn('Canvas failed:', canvas.error.name, canvas.error.message);
     break;
   case 'unsupported':
-    console.info('Canvas is unavailable in this browser');
+    // `reason` is present when the cause is known, e.g. 'api-unavailable'.
+    console.info('Canvas is unavailable:', canvas.reason ?? 'unknown cause');
     break;
   case 'skipped':
     console.info('Canvas was skipped by policy');
@@ -174,7 +175,7 @@ if (devices.status === 'fulfilled') {
 }
 
 const webRtc = result.auxiliary.webRtc;
-console.log(webRtc.status); // 'skipped' unless includeWebRtc was true
+console.log(webRtc.status); // 'skipped' unless optIn included 'webRtc'
 ```
 
 ## Enable WebRTC after consent
@@ -194,7 +195,7 @@ const enableWebRtcButton = document.querySelector<HTMLButtonElement>(
 enableWebRtcButton?.addEventListener('click', () => {
   void (async () => {
     const result = await collector.collect({
-      includeWebRtc: true,
+      optIn: ['webRtc'],
       timeoutMs: 10_000,
     });
 
@@ -245,6 +246,43 @@ try {
 
 If `controller.abort(customReason)` is used, the promise rejects with that
 reason rather than necessarily with a `DOMException`.
+
+## Handle environment and option errors
+
+Failures caused by libcreep's own checks reject with a `LibCreepError`, whose
+`code` can be branched on without matching message text:
+
+```ts
+import { collect, LibCreepError } from 'libcreep';
+
+try {
+  const result = await collect({ timeoutMs: 10_000 });
+  console.log(result.visitorId);
+} catch (error) {
+  if (!(error instanceof LibCreepError)) throw error;
+  switch (error.code) {
+    case 'NOT_BROWSER':
+    case 'UNSUPPORTED_ENVIRONMENT':
+      console.info('Fingerprinting is unavailable here:', error.message);
+      break;
+    case 'INVALID_OPTION':
+      throw error;
+  }
+}
+```
+
+## Inspect bot signals
+
+```ts
+const { botMask, matchedRules } = result.bot;
+
+if (matchedRules.includes('workerScopeIsBlocked')) {
+  console.info('The worker scope was unavailable or blocked');
+}
+console.log(botMask, matchedRules);
+```
+
+The bot rules are client-side heuristics, not a verdict.
 
 ## Build a custom component hash
 
@@ -313,13 +351,17 @@ const collector = await load({
 });
 
 const result = await collector.collect({ timeoutMs: 10_000 });
-console.log(result.components.workerScope.status);
+const { workerScope } = result.components;
+console.log(workerScope.status);
+if (workerScope.status === 'unsupported') {
+  console.log(workerScope.reason); // 'worker-unavailable'
+}
 ```
 
 A same-origin URL is the most portable configuration. Service workers require
 same-origin hosting and a secure context (HTTPS or localhost). If every worker
-attempt fails, only `workerScope` becomes `unsupported`; the rest of collection
-continues.
+attempt fails, only `workerScope` becomes `unsupported` (with
+`reason: 'worker-unavailable'`); the rest of collection continues.
 
 ## Store version context with an identifier
 

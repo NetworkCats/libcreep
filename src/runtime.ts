@@ -43,6 +43,7 @@ import getWebRTCData, {
   getMediaCapabilities,
   getWebRTCDevices,
 } from './internal/webrtc/index.js';
+import { Unsupported } from './internal/utils/unsupported.js';
 import getWindowFeatures from './internal/window/index.js';
 import getBestWorkerScope from './internal/worker/index.js';
 import {
@@ -57,12 +58,13 @@ import {
   type AuxiliaryComponentResults,
   type BotDetectionResult,
   type ComponentResult,
-  type CollectionOptions,
+  type CollectorCollectOptions,
   type CoreComponentName,
   type CoreComponentResults,
   type CoreComponentValues,
   type FingerprintResult,
   type FocusedHashes,
+  type OptInAuxiliaryComponentName,
   type StableFingerprint,
   type WorkerStrategy,
 } from './types.js';
@@ -75,7 +77,7 @@ type FeaturesInput = Parameters<typeof getEngineFeatures>[0];
 type HeadlessInput = Parameters<typeof getHeadlessFeatures>[0];
 type NavigatorInput = Parameters<typeof getNavigator>[0];
 
-interface RuntimeOptions extends CollectionOptions {
+interface RuntimeOptions extends CollectorCollectOptions {
   readonly workerStrategy: WorkerStrategy;
   readonly workerUrl: string;
 }
@@ -115,6 +117,18 @@ function isCancellation(_error: unknown, signal?: AbortSignal): boolean {
   return signal?.aborted === true;
 }
 
+function toComponentResult<T>(
+  value: T | Unsupported | null | undefined,
+  durationMs: number,
+): ComponentResult<NonNullable<T>> {
+  if (value instanceof Unsupported) {
+    return { durationMs, reason: value.reason, status: 'unsupported' };
+  }
+  return value === undefined || value === null
+    ? { durationMs, status: 'unsupported' }
+    : { durationMs, status: 'fulfilled', value };
+}
+
 /** @internal Runs a probe while retaining its underlying lifetime. */
 export async function runProbe(
   results: ProbeResults,
@@ -134,11 +148,7 @@ export async function runProbe(
       signal,
     );
     throwIfAborted(signal);
-    const durationMs = now() - start;
-    results[name] =
-      value === undefined || value === null
-        ? { durationMs, status: 'unsupported' }
-        : { durationMs, status: 'fulfilled', value };
+    results[name] = toComponentResult(value, now() - start);
   } catch (error) {
     if (isCancellation(error, signal)) throw error;
     results[name] = {
@@ -268,7 +278,7 @@ function resetDetectorState(): number {
 }
 
 async function runAuxiliary<T>(
-  detector: () => Promise<T>,
+  detector: () => Promise<T | Unsupported | null | undefined>,
   signal?: AbortSignal,
 ): Promise<ComponentResult<NonNullable<T>>> {
   const start = now();
@@ -277,10 +287,7 @@ async function runAuxiliary<T>(
     const detectorOperation = Promise.resolve().then(detector);
     const value = await rejectWhenAborted(detectorOperation, signal);
     throwIfAborted(signal);
-    const durationMs = now() - start;
-    return value === undefined || value === null
-      ? { durationMs, status: 'unsupported' }
-      : { durationMs, status: 'fulfilled', value };
+    return toComponentResult(value, now() - start);
   } catch (error) {
     if (isCancellation(error, signal)) throw error;
     return {
@@ -292,26 +299,27 @@ async function runAuxiliary<T>(
 }
 
 async function collectAuxiliary(
-  includeWebRtc: boolean,
+  optIn: ReadonlyArray<OptInAuxiliaryComponentName>,
   signal?: AbortSignal,
 ): Promise<AuxiliaryComponentResults> {
-  const [mediaDevices, status, mediaCapabilities, webRtc] = await Promise.all([
-    runAuxiliary(getWebRTCDevices, signal),
-    runAuxiliary(() => getStatus(signal), signal),
-    runAuxiliary(getMediaCapabilities, signal),
-    includeWebRtc
-      ? runAuxiliary(() => getWebRTCData(signal), signal)
-      : Promise.resolve({
-          durationMs: 0,
-          status: 'skipped',
-        } as const),
-  ]);
+  const [mediaDevices, browserStatus, mediaCapabilities, webRtc] =
+    await Promise.all([
+      runAuxiliary(getWebRTCDevices, signal),
+      runAuxiliary(() => getStatus(signal), signal),
+      runAuxiliary(getMediaCapabilities, signal),
+      optIn.includes('webRtc')
+        ? runAuxiliary(() => getWebRTCData(signal), signal)
+        : Promise.resolve({
+            durationMs: 0,
+            status: 'skipped',
+          } as const),
+    ]);
 
   return {
+    browserStatus,
     mediaCapabilities:
       mediaCapabilities as AuxiliaryComponentResults['mediaCapabilities'],
     mediaDevices,
-    status,
     webRtc,
   };
 }
@@ -415,8 +423,8 @@ async function enrichComponents(
 
   const hashTargets: Partial<Record<CoreComponentName, unknown>> = {
     ...raw,
-    htmlElementVersion: asRecord(raw.htmlElementVersion).keys,
-    maths: asRecord(raw.maths).data,
+    htmlElementProperties: asRecord(raw.htmlElementProperties).keys,
+    math: asRecord(raw.math).data,
     consoleErrors: asRecord(raw.consoleErrors).errors,
   };
   const componentHashEntries = await Promise.all(
@@ -532,7 +540,7 @@ export function buildStableFingerprint(
   const worker = asRecord(fp.workerScope);
   const navigatorData = asRecord(fp.navigator);
   const screen = asRecord(fp.screen);
-  const resistance = asRecord(fp.resistance);
+  const resistance = asRecord(fp.privacyResistance);
   const canvas2d = asRecord(fp.canvas2d);
   const webgl = asRecord(fp.canvasWebgl);
   const cssMedia = asRecord(fp.cssMedia);
@@ -713,7 +721,7 @@ export function buildStableFingerprint(
                 ? undefined
                 : hardenEntropy(cssMedia.screenQuery),
           },
-    css: asRecord(css.system).fonts,
+    cssSystemFonts: asRecord(css.system).fonts,
     timezone:
       Object.keys(timezone).length === 0 || timezone.lied || entropy.TIME_ZONE
         ? undefined
@@ -725,13 +733,60 @@ export function buildStableFingerprint(
       Object.keys(audio).length === 0 || audio.lied || entropy.AUDIO
         ? undefined
         : audio,
-    fonts:
+    fontFaceLoadFonts:
       Object.keys(fonts).length === 0 || fonts.lied || entropy.FONTS
         ? undefined
         : fonts.fontFaceLoadFonts,
   };
 
   return stable as StableFingerprint;
+}
+
+const LIE_FLAG_KEYS = ['lied', 'liedTextMetrics', 'parameterOrExtensionLie'];
+
+/**
+ * @internal Detectors report a lie as `false`, `true`, or the first lying
+ * API's lie count. Publish booleans so consumers need not coerce them.
+ */
+export function normalizeLieFlags(results: ProbeResults): void {
+  for (const [name, result] of Object.entries(results)) {
+    if (result?.status !== 'fulfilled') continue;
+    const value = result.value;
+    if (value === null || typeof value !== 'object') continue;
+    const flags = LIE_FLAG_KEYS.filter((key) => Object.hasOwn(value, key));
+    if (flags.length === 0) continue;
+    results[name as CoreComponentName] = {
+      ...result,
+      value: {
+        ...value,
+        ...Object.fromEntries(
+          flags.map((key) => [key, Boolean(Reflect.get(value, key))]),
+        ),
+      },
+    };
+  }
+}
+
+/** Creep.js names for components whose public names were made descriptive. */
+const UPSTREAM_COMPONENT_NAMES: Partial<Record<CoreComponentName, string>> = {
+  anomalies: 'trash',
+  apiTampering: 'lies',
+  engineFeatures: 'features',
+  htmlElementProperties: 'htmlElementVersion',
+  math: 'maths',
+  privacyResistance: 'resistance',
+};
+
+/** @internal Keys values by Creep.js names for the ported fuzzy and bot rules. */
+export function toUpstreamFingerprint(
+  values: CoreComponentValues,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(values).map(([name, value]) => [
+      UPSTREAM_COMPONENT_NAMES[name as CoreComponentName] ?? name,
+      value,
+    ]),
+  );
 }
 
 function completeResults(results: ProbeResults): CoreComponentResults {
@@ -764,7 +819,7 @@ export async function collectFingerprint(
     throwIfAborted(signal);
     liesInitializationDurationMs = resetDetectorState();
     throwIfAborted(signal);
-    auxiliaryPromise = collectAuxiliary(options.includeWebRtc ?? false, signal);
+    auxiliaryPromise = collectAuxiliary(options.optIn ?? [], signal);
     void auxiliaryPromise.catch(() => undefined);
     const isBrave = IS_BLINK
       ? await rejectWhenAborted(Promise.resolve(braveBrowser()), signal)
@@ -787,18 +842,18 @@ export async function collectFingerprint(
         probe('canvasWebgl', getCanvasWebgl),
         probe('canvas2d', getCanvas2d),
         probe('windowFeatures', getWindowFeatures),
-        probe('htmlElementVersion', getHTMLElementVersion),
+        probe('htmlElementProperties', getHTMLElementVersion),
         probe('css', getCSS),
         probe('cssMedia', getCSSMedia),
         probe('screen', () => getScreen(false)),
-        probe('maths', getMaths),
+        probe('math', getMaths),
         probe('consoleErrors', getConsoleErrors),
         probe('timezone', getTimezone),
         probe('clientRects', getClientRects),
         probe('fonts', getFonts),
         probe('media', getMedia),
         probe('svg', getSVG),
-        probe('resistance', getResistance),
+        probe('privacyResistance', getResistance),
         probe('intl', getIntl),
       ],
       signal,
@@ -818,7 +873,7 @@ export async function collectFingerprint(
             ),
           }),
         ),
-        probe('features', () =>
+        probe('engineFeatures', () =>
           getEngineFeatures({
             cssComputed: readProbe<FeaturesInput['cssComputed']>(
               results,
@@ -838,19 +893,20 @@ export async function collectFingerprint(
     );
     await waitForProbes(
       [
-        probe('lies', getLies),
-        probe('trash', getTrash),
+        probe('apiTampering', getLies),
+        probe('anomalies', getTrash),
         probe('capturedErrors', getCapturedErrors),
       ],
       signal,
     );
-    const liesResult = results.lies;
+    const liesResult = results.apiTampering;
     if (liesResult !== undefined) {
-      results.lies = {
+      results.apiTampering = {
         ...liesResult,
         durationMs: liesResult.durationMs + liesInitializationDurationMs,
       };
     }
+    normalizeLieFlags(results);
 
     const { components: collectedValues, focusedHashes } =
       await rejectWhenAborted(
@@ -871,6 +927,7 @@ export async function collectFingerprint(
       buildStableFingerprint(values, braveFingerprintingBlocking),
     );
     const auxiliary = snapshot(await auxiliaryPromise);
+    const upstreamValues = toUpstreamFingerprint(values);
     const [rawVisitorId, visitorId, fuzzyHash, bot] = await rejectWhenAborted(
       Promise.all([
         hashComponents(
@@ -882,9 +939,12 @@ export async function collectFingerprint(
           algorithmVersion: ALGORITHM_VERSION,
           components: stableComponents,
         }),
-        getFuzzyHash(values),
+        getFuzzyHash(upstreamValues),
         Promise.resolve(
-          getBotDetection(values, { computeWindowsRelease, getFeaturesLie }),
+          getBotDetection(upstreamValues, {
+            computeWindowsRelease,
+            getFeaturesLie,
+          }),
         ),
       ]),
       signal,

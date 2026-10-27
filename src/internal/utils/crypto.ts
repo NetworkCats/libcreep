@@ -117,10 +117,12 @@ const getBotDetection = (fp: BotFingerprint, imports: BotDetectionImports): BotD
 
 	const botMask = BOT_RULE_NAMES
 		.map((key) => botPatterns[key] ? '1' : '0').join('')
-	const firstMatchedRule = BOT_RULE_NAMES.find((key) => botPatterns[key])
+	const matchedRules = BOT_RULE_NAMES.filter((key) => botPatterns[key])
+	const [firstMatchedRule] = matchedRules
 	return {
 		botMask,
 		...(firstMatchedRule ? { firstMatchedRule } : {}),
+		matchedRules,
 	}
 }
 
