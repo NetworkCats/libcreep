@@ -9,12 +9,17 @@ export default function getCSS() {
 	) => {
 		try {
 			// get CSSStyleDeclaration
-			const firstRule = document.styleSheets[0]?.cssRules[0]
-			const ruleStyle: unknown = firstRule && Reflect.get(firstRule, 'style')
+			// Read stylesheet rules only when requested: a cross-origin first
+			// stylesheet throws on cssRules access and would discard the result.
+			const getRuleStyle = (): CSSStyleDeclaration | undefined => {
+				const firstRule = document.styleSheets[0]?.cssRules[0]
+				const ruleStyle: unknown = firstRule && Reflect.get(firstRule, 'style')
+				return ruleStyle instanceof CSSStyleDeclaration ? ruleStyle : undefined
+			}
 			const cssStyleDeclaration: CSSStyleDeclaration | undefined = (
 				type == 'getComputedStyle' ? getComputedStyle(document.body) :
 					type == 'HTMLElement.style' ? document.body.style :
-						ruleStyle instanceof CSSStyleDeclaration ? ruleStyle : undefined
+						getRuleStyle()
 			)
 			if (!cssStyleDeclaration) {
 				throw new TypeError('invalid argument string')

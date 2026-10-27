@@ -69,6 +69,8 @@ interface NavigatorExtensions {
 	}
 }
 
+const TRUSTED_PRIVACY_SIGNALS = new Set(['1', 'true', 'yes', '0', 'false', 'no', 'unspecified', 'null', 'undefined'])
+
 // special thanks to https://arh.antoinevastel.com for inspiration
 export default async function getNavigator(workerScope?: WorkerNavigatorData) {
 	try {
@@ -175,7 +177,7 @@ export default async function getNavigator(workerScope?: WorkerNavigatorData) {
 				const reportedUserAgent = caniuse(() => navigator.userAgent)
 				if (reportedUserAgent === undefined) return undefined
 				const reportedSystem = getOS(reportedUserAgent)
-				const isBrave = await braveBrowser()
+				const isBrave = braveBrowser()
 				const report = decryptUserAgent({
 					ua: reportedUserAgent,
 					os: reportedSystem,
@@ -254,8 +256,7 @@ export default async function getNavigator(workerScope?: WorkerNavigatorData) {
 			}, 'deviceMemory failed'),
 			doNotTrack: attempt(() => {
 				const { doNotTrack } = navigator
-				const trusted = new Set(['1', 'true', 'yes', '0', 'false', 'no', 'unspecified', 'null', 'undefined'])
-				if (!trusted.has(String(doNotTrack))) {
+				if (!TRUSTED_PRIVACY_SIGNALS.has(String(doNotTrack))) {
 					sendToTrash('doNotTrack - unusual result', doNotTrack)
 				}
 				return doNotTrack
@@ -265,8 +266,7 @@ export default async function getNavigator(workerScope?: WorkerNavigatorData) {
 					return undefined
 				}
 				const { globalPrivacyControl } = extendedNavigator
-				const trusted = new Set(['1', 'true', 'yes', '0', 'false', 'no', 'unspecified', 'null', 'undefined'])
-				if (!trusted.has(String(globalPrivacyControl))) {
+				if (!TRUSTED_PRIVACY_SIGNALS.has(String(globalPrivacyControl))) {
 					sendToTrash('globalPrivacyControl - unusual result', globalPrivacyControl)
 				}
 				return globalPrivacyControl

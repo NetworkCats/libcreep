@@ -195,7 +195,7 @@ function queryLies({
 	const objName = obj == null ? undefined : Reflect.get(obj, 'name')
 	const nativeProto = Object.getPrototypeOf(apiFunction)
 	const restoreApiFunction = () => restorePrototype(apiFunction, nativeProto)
-	const interfaceInstance = typeof objName == 'string' ? Reflect.get(scope, objName.toLowerCase()) : undefined
+	const interfaceInstance = typeof objName == 'string' ? Reflect.get(self, objName.toLowerCase()) : undefined
 	const hasInterfaceInstance = interfaceInstance != null &&
 		(typeof interfaceInstance == 'object' || typeof interfaceInstance == 'function')
 	let lies: Record<string, boolean> = {
@@ -540,7 +540,10 @@ function getPrototypeLies(scope: Window & typeof globalThis) {
 	const {
 		searchLies,
 	} = lieDetector
-	const getRealmValue = (name: string): unknown => Reflect.get(scope, name)
+	// Inspect the page's own APIs, which the other probes read. The clean
+	// phantom realm (scope) is only the native Function.prototype.toString
+	// reference inside the lie detector.
+	const getRealmValue = (name: string): unknown => Reflect.get(self, name)
 	const getRealmProperty = (parent: string, property: string): unknown => {
 		const value: unknown = getRealmValue(parent)
 		return value != null && (typeof value == 'object' || typeof value == 'function') ? Reflect.get(value, property) : undefined
@@ -940,10 +943,10 @@ const getPluginLies = (plugins: PluginArray, mimeTypes: MimeTypeArray) => {
 		mimeTypesList.map((mimeType) => mimeType.enabledPlugin),
 	)
 	const trustedPluginNames = new Set(pluginsOwnPropertyNames)
-	const mimeTypeEnabledPluginsNames = mimeTypeEnabledPlugins.map((plugin) => plugin?.name)
+	const mimeTypeEnabledPluginsNames = new Set(mimeTypeEnabledPlugins.map((plugin) => plugin?.name))
 	const trustedPluginNamesArray = [...trustedPluginNames]
 	trustedPluginNamesArray.forEach((name) => {
-		const validName = new Set(mimeTypeEnabledPluginsNames).has(name)
+		const validName = mimeTypeEnabledPluginsNames.has(name)
 		if (!validName) {
 			trustedPluginNames.delete(name)
 		}
@@ -968,15 +971,6 @@ const getPluginLies = (plugins: PluginArray, mimeTypes: MimeTypeArray) => {
 	}
 
 	// 4. Expect valid MimeType(s) in plugin
-	const pluginMimeTypes = pluginsList.flatMap((plugin) => [...plugin])
-	const pluginMimeTypesNames = pluginMimeTypes.map((mimeType) => mimeType.type)
-	pluginMimeTypesNames.forEach((name) => {
-		const validName = trustedMimeTypes.has(name)
-		if (!validName) {
-			trustedMimeTypes.delete(name)
-		}
-	})
-
 	pluginsList.forEach((plugin) => {
 		const pluginMimeTypes = [...plugin].map((mimeType) => mimeType.type)
 		return pluginMimeTypes.forEach((mimetype) => {

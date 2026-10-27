@@ -64,11 +64,12 @@ const isUserAgentDataBlank = async (userAgentData: UserAgentDataLike | undefined
 	const result = await settleWithin(
 		Promise.resolve().then(
 			() =>
-				Reflect.apply(getHighEntropyValues, userAgentData, [['platform']]) as Promise<Record<string, unknown>>,
+				Reflect.apply(getHighEntropyValues, userAgentData, [['platform']]) as Promise<unknown>,
 		),
-		{},
+		undefined,
 	)
-	return result.platform === ''
+	// A spoofed implementation may resolve to a non-object or throwing getter.
+	return readProperty(result, 'platform') === ''
 }
 
 const supportsCSS = (condition: string): boolean => {

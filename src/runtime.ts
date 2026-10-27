@@ -45,6 +45,11 @@ import getWebRTCData, {
 } from './internal/webrtc/index.js';
 import getWindowFeatures from './internal/window/index.js';
 import getBestWorkerScope from './internal/worker/index.js';
+import {
+  createOperationCancellation,
+  rejectWhenAborted,
+  throwIfAborted,
+} from './cancellation.js';
 import { hashComponents, hashValue, normalizeError } from './hash.js';
 import { ALGORITHM_VERSION, LIBRARY_VERSION } from './version.js';
 import {
@@ -52,7 +57,6 @@ import {
   type AuxiliaryComponentResults,
   type BotDetectionResult,
   type ComponentResult,
-  type ComponentError,
   type CollectionOptions,
   type CoreComponentName,
   type CoreComponentResults,
@@ -76,67 +80,13 @@ interface RuntimeOptions extends CollectionOptions {
   readonly workerUrl: string;
 }
 
-interface CollectionCancellation {
-  readonly dispose: () => void;
-  readonly signal?: AbortSignal;
-}
-
 /** @internal Tracks detector work that may outlive its abort-facing wrapper. */
 export interface DetectorActivity {
   readonly pending: Set<Promise<unknown>>;
 }
 
-const MAX_TIMEOUT_MS = 2_147_483_647;
-
 function now(): number {
   return performance.now();
-}
-
-function serializeError(error: unknown): ComponentError {
-  return normalizeError(error);
-}
-
-function getAbortReason(signal: AbortSignal): unknown {
-  return 'reason' in signal
-    ? signal.reason
-    : new DOMException('Fingerprint collection was aborted.', 'AbortError');
-}
-
-function throwIfAborted(signal?: AbortSignal): void {
-  if (!signal?.aborted) return;
-  throw getAbortReason(signal);
-}
-
-function rejectWhenAborted<T>(
-  operation: Promise<T>,
-  signal?: AbortSignal,
-): Promise<T> {
-  if (signal === undefined) return operation;
-
-  return new Promise<T>((resolve, reject) => {
-    let settled = false;
-    const cleanup = (): boolean => {
-      if (settled) return false;
-      settled = true;
-      signal.removeEventListener('abort', abort);
-      return true;
-    };
-    const abort = (): void => {
-      if (!cleanup()) return;
-      reject(getAbortReason(signal));
-    };
-
-    void operation.then(
-      (value) => {
-        if (cleanup()) resolve(value);
-      },
-      (error: unknown) => {
-        if (cleanup()) reject(error);
-      },
-    );
-    signal.addEventListener('abort', abort, { once: true });
-    if (signal.aborted) abort();
-  });
 }
 
 /** @internal Keeps the underlying detector visible after its wrapper aborts. */
@@ -163,49 +113,6 @@ export async function drainDetectorActivity(
 
 function isCancellation(_error: unknown, signal?: AbortSignal): boolean {
   return signal?.aborted === true;
-}
-
-function createCollectionCancellation(
-  signal: AbortSignal | undefined,
-  timeoutMs: number | undefined,
-): CollectionCancellation {
-  if (
-    timeoutMs !== undefined &&
-    (!Number.isFinite(timeoutMs) || timeoutMs < 0 || timeoutMs > MAX_TIMEOUT_MS)
-  ) {
-    throw new TypeError(
-      `timeoutMs must be a finite number between 0 and ${MAX_TIMEOUT_MS}.`,
-    );
-  }
-  if (signal === undefined && timeoutMs === undefined) {
-    return { dispose: () => undefined };
-  }
-
-  const controller = new AbortController();
-  const forwardAbort = (): void => {
-    controller.abort(signal?.reason);
-  };
-  signal?.addEventListener('abort', forwardAbort, { once: true });
-  if (signal?.aborted) forwardAbort();
-  const timeout =
-    timeoutMs === undefined
-      ? undefined
-      : window.setTimeout(() => {
-          controller.abort(
-            new DOMException(
-              `Fingerprint collection timed out after ${timeoutMs}ms.`,
-              'TimeoutError',
-            ),
-          );
-        }, timeoutMs);
-
-  return {
-    signal: controller.signal,
-    dispose(): void {
-      signal?.removeEventListener('abort', forwardAbort);
-      if (timeout !== undefined) window.clearTimeout(timeout);
-    },
-  };
 }
 
 /** @internal Runs a probe while retaining its underlying lifetime. */
@@ -236,7 +143,7 @@ export async function runProbe(
     if (isCancellation(error, signal)) throw error;
     results[name] = {
       durationMs: now() - start,
-      error: serializeError(error),
+      error: normalizeError(error),
       status: 'rejected',
     };
   }
@@ -277,15 +184,11 @@ function stripComponentHash(value: unknown): unknown {
   return signals;
 }
 
-function hasOwn(record: UnknownRecord, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(record, key);
-}
-
 function hashRecordValue(
   record: UnknownRecord,
   key: string,
 ): Promise<string | undefined> {
-  return hasOwn(record, key) &&
+  return Object.hasOwn(record, key) &&
     record[key] !== undefined &&
     record[key] !== null
     ? hashValue(record[key])
@@ -382,7 +285,7 @@ async function runAuxiliary<T>(
     if (isCancellation(error, signal)) throw error;
     return {
       durationMs: now() - start,
-      error: serializeError(error),
+      error: normalizeError(error),
       status: 'rejected',
     };
   }
@@ -462,35 +365,39 @@ export async function buildFocusedHashes(
     timezone,
     worker,
   });
-  const focusedHashCandidates: FocusedHashes = {
-    canvas2dEmoji: await hashRecordValue(canvas2d, 'emojiURI'),
-    canvas2dImage: await hashRecordValue(canvas2d, 'dataURI'),
-    canvas2dPaint: await hashRecordValue(canvas2d, 'paintURI'),
-    canvas2dText: await hashRecordValue(canvas2d, 'textURI'),
-    canvasWebglImage: await hashRecordValue(webgl, 'dataURI'),
-    canvasWebglParameters: !hasWebglParameters
-      ? undefined
-      : await hashValue(
-          getReducedGpuParameters(webgl, braveFingerprintingBlocking),
-        ),
+  const focusedHashCandidates: Record<
+    keyof FocusedHashes,
+    Promise<string | undefined> | undefined
+  > = {
+    canvas2dEmoji: hashRecordValue(canvas2d, 'emojiURI'),
+    canvas2dImage: hashRecordValue(canvas2d, 'dataURI'),
+    canvas2dPaint: hashRecordValue(canvas2d, 'paintURI'),
+    canvas2dText: hashRecordValue(canvas2d, 'textURI'),
+    canvasWebglImage: hashRecordValue(webgl, 'dataURI'),
+    canvasWebglParameters: hasWebglParameters
+      ? hashValue(getReducedGpuParameters(webgl, braveFingerprintingBlocking))
+      : undefined,
     deviceAndTimezone: deviceAndTimezoneData.every(
       (value) => value === undefined || value === null,
     )
       ? undefined
-      : await hashValue(deviceAndTimezoneData),
+      : hashValue(deviceAndTimezoneData),
     clientRects: clientRectValues.some(
       (value) => value === undefined || value === null,
     )
       ? undefined
-      : await hashValue(clientRectValues),
-    mediaMimeTypes: await hashRecordValue(media, 'mimeTypes'),
-    cssComputedStyle: await hashRecordValue(css, 'computedStyle'),
-    cssSystem: await hashRecordValue(css, 'system'),
+      : hashValue(clientRectValues),
+    mediaMimeTypes: hashRecordValue(media, 'mimeTypes'),
+    cssComputedStyle: hashRecordValue(css, 'computedStyle'),
+    cssSystem: hashRecordValue(css, 'system'),
   };
-  return Object.fromEntries(
-    Object.entries(focusedHashCandidates).filter(
-      ([, hash]) => hash !== undefined,
+  const focusedHashEntries = await Promise.all(
+    Object.entries(focusedHashCandidates).map(
+      async ([name, hash]) => [name, await hash] as const,
     ),
+  );
+  return Object.fromEntries(
+    focusedHashEntries.filter(([, hash]) => hash !== undefined),
   ) as FocusedHashes;
 }
 
@@ -526,14 +433,14 @@ async function enrichComponents(
     string | undefined
   >;
 
-  const pixels =
-    Array.isArray(webgl.pixels) && webgl.pixels.length > 0
-      ? await hashValue(webgl.pixels)
-      : undefined;
-  const pixels2 =
-    Array.isArray(webgl.pixels2) && webgl.pixels2.length > 0
-      ? await hashValue(webgl.pixels2)
-      : undefined;
+  const hashPixels = (value: unknown): Promise<string | undefined> =>
+    Array.isArray(value) && value.length > 0
+      ? hashValue(value)
+      : Promise.resolve(undefined);
+  const [pixels, pixels2] = await Promise.all([
+    hashPixels(webgl.pixels),
+    hashPixels(webgl.pixels2),
+  ]);
 
   const components = Object.fromEntries(
     CORE_COMPONENT_NAMES.flatMap((name) => {
@@ -551,14 +458,6 @@ async function enrichComponents(
       ];
     }),
   ) as CoreComponentValues;
-
-  for (const name of CORE_COMPONENT_NAMES) {
-    const result = results[name];
-    const component = components[name];
-    if (result?.status === 'fulfilled' && component !== undefined) {
-      results[name] = { ...result, value: component };
-    }
-  }
 
   const focusedHashes = await buildFocusedHashes(
     raw,
@@ -848,7 +747,7 @@ export async function collectFingerprint(
   const start = now();
   const results: ProbeResults = {};
   const detectorActivity: DetectorActivity = { pending: new Set() };
-  const cancellation = createCollectionCancellation(
+  const cancellation = createOperationCancellation(
     options.signal,
     options.timeoutMs,
   );

@@ -8,7 +8,7 @@ const hashMini = (value: unknown): string => {
 	const hash = json.split('').reduce((hash, _char, i) => {
 		return Math.imul(31, hash) + json.charCodeAt(i) | 0
 	}, 0x811c9dc5)
-	return ('0000000' + (hash >>> 0).toString(16)).substr(-8)
+	return (hash >>> 0).toString(16).padStart(8, '0')
 }
 
 // instance id
@@ -124,7 +124,7 @@ const getBotDetection = (fp: BotFingerprint, imports: BotDetectionImports): BotD
 	}
 }
 
-// Requires updating the development log below when keys are added to the fingerprint.
+// Requires updating when keys are added to the fingerprint.
 const FUZZY_METRIC_KEYS: readonly string[] = Object.freeze([
 		'canvas2d.dataURI',
 		'canvas2d.emojiSet',
@@ -308,24 +308,7 @@ const getFuzzyHash = async (fp: object): Promise<string> => {
 
 	// reduce to 64 bins
 	const maxBins = 64
-	const metricKeysReported = Object.keys(metricsAll)
 	const metricKeyBins = partitionFuzzyMetricKeys(metricKeys, maxBins)
-
-	// update log
-	const devMode = false
-	if (devMode && (''+metricKeysReported != ''+metricKeys)) {
-		const newKeys = metricKeysReported.filter((key) => !metricKeys.includes(key))
-		const oldKeys = metricKeys.filter((key) => !metricKeysReported.includes(key))
-
-		if (newKeys.length || oldKeys.length) {
-			if (newKeys.length) console.warn('added fuzzy key(s):\n', newKeys.join('\n'))
-			if (oldKeys.length) console.warn('removed fuzzy key(s):\n', oldKeys.join('\n'))
-
-			console.groupCollapsed('update keys for accurate fuzzy hashing:')
-			console.log(metricKeysReported.map((x) => `'${x}',`).join('\n'))
-			console.groupEnd()
-		}
-	}
 
 	// Fuzzy IDs intentionally retain the upstream JSON hash. They use only the
 	// first hex digit from each fixed metric bin and are not component identities.

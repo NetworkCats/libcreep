@@ -6,9 +6,12 @@ import getCSSMedia from '../src/internal/cssmedia/index.js';
 import getClientRects from '../src/internal/domrect/index.js';
 import { errorsCaptured } from '../src/internal/errors/index.js';
 import {
+  initializePrototypeLies,
+  lieProps,
   lieRecords,
   PARENT_PHANTOM,
   PHANTOM_DARKNESS,
+  removePhantom,
 } from '../src/internal/lies/index.js';
 import getVoices from '../src/internal/speech/index.js';
 import getSVG from '../src/internal/svg/index.js';
@@ -18,7 +21,10 @@ import {
   IS_WEBKIT,
   LowerEntropy,
 } from '../src/internal/utils/helpers.js';
-import { replaceElement } from '../src/internal/utils/measurement.js';
+import {
+  createMeasurementFragment,
+  replaceElement,
+} from '../src/internal/utils/measurement.js';
 import getCanvasWebgl from '../src/internal/webgl/index.js';
 import {
   drainDetectorActivity,
@@ -278,5 +284,51 @@ describe('WebGL serialization', () => {
     expect(new Set(data.extensions).size).toBe(data.extensions.length);
     expect(data.pixels).toHaveLength(17 * 42 * 4);
     if (data.pixels2) expect(data.pixels2).toHaveLength(17 * 42 * 4);
+  });
+});
+
+describe('detector regressions', () => {
+  it('detects prototype tampering in the page realm', () => {
+    const descriptor = Object.getOwnPropertyDescriptor(
+      Navigator.prototype,
+      'hardwareConcurrency',
+    );
+    if (!descriptor?.get) return;
+    Object.defineProperty(Navigator.prototype, 'hardwareConcurrency', {
+      ...descriptor,
+      get: () => 4,
+    });
+    try {
+      initializePrototypeLies();
+      expect(lieProps['Navigator.hardwareConcurrency']).toBeTruthy();
+    } finally {
+      Object.defineProperty(
+        Navigator.prototype,
+        'hardwareConcurrency',
+        descriptor,
+      );
+      initializePrototypeLies();
+      removePhantom();
+    }
+    expect(lieProps['Navigator.hardwareConcurrency']).toBeFalsy();
+  });
+
+  it('keeps computed style when the first stylesheet is unreadable', () => {
+    vi.spyOn(Document.prototype, 'styleSheets', 'get').mockImplementation(
+      () => {
+        throw new DOMException('cross-origin stylesheet', 'SecurityError');
+      },
+    );
+
+    expect(getCSS()?.computedStyle).toBeDefined();
+  });
+
+  it('builds measurement fixtures without surrounding text nodes', () => {
+    const fragment = createMeasurementFragment`
+      <div></div>
+    `;
+
+    expect(fragment.childNodes).toHaveLength(1);
+    expect(fragment.firstChild?.nodeName).toBe('DIV');
   });
 });

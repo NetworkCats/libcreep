@@ -1,3 +1,10 @@
+import {
+  createOperationCancellation,
+  getAbortReason,
+  rejectWhenAborted,
+  throwIfAborted,
+  type OperationCancellation,
+} from './cancellation.js';
 import { componentsToDebugString, hashComponents } from './hash.js';
 import type {
   BrowserCapabilities,
@@ -33,54 +40,7 @@ interface RuntimeModule {
   ): Promise<FingerprintResult>;
 }
 
-interface OperationCancellation {
-  readonly dispose: () => void;
-  readonly signal?: AbortSignal;
-}
-
 let collectionQueue: Promise<void> = Promise.resolve();
-const MAX_TIMEOUT_MS = 2_147_483_647;
-
-function getAbortReason(signal: AbortSignal): unknown {
-  return 'reason' in signal
-    ? signal.reason
-    : new DOMException('Fingerprint collection was aborted.', 'AbortError');
-}
-
-function throwIfAborted(signal?: AbortSignal): void {
-  if (signal?.aborted) throw getAbortReason(signal);
-}
-
-function rejectWhenAborted<T>(
-  operation: Promise<T>,
-  signal?: AbortSignal,
-): Promise<T> {
-  if (signal === undefined) return operation;
-
-  return new Promise<T>((resolve, reject) => {
-    let settled = false;
-    const cleanup = (): boolean => {
-      if (settled) return false;
-      settled = true;
-      signal.removeEventListener('abort', abort);
-      return true;
-    };
-    const abort = (): void => {
-      if (cleanup()) reject(getAbortReason(signal));
-    };
-
-    void operation.then(
-      (value) => {
-        if (cleanup()) resolve(value);
-      },
-      (error: unknown) => {
-        if (cleanup()) reject(error);
-      },
-    );
-    signal.addEventListener('abort', abort, { once: true });
-    if (signal.aborted) abort();
-  });
-}
 
 function isObjectLike(value: unknown): value is object {
   return (
@@ -197,55 +157,6 @@ function getWorkerStrategy(
   return value;
 }
 
-function validateOperationOptions(options: {
-  readonly timeoutMs?: number;
-}): void {
-  const { timeoutMs } = options;
-  if (
-    timeoutMs !== undefined &&
-    (!Number.isFinite(timeoutMs) || timeoutMs < 0 || timeoutMs > MAX_TIMEOUT_MS)
-  ) {
-    throw new TypeError(
-      `timeoutMs must be a finite number between 0 and ${MAX_TIMEOUT_MS}.`,
-    );
-  }
-}
-
-function createOperationCancellation(
-  signal: AbortSignal | undefined,
-  timeoutMs: number | undefined,
-): OperationCancellation {
-  if (signal === undefined && timeoutMs === undefined) {
-    return { dispose: () => undefined };
-  }
-
-  const controller = new AbortController();
-  const forwardAbort = (): void => {
-    controller.abort(signal?.reason);
-  };
-  signal?.addEventListener('abort', forwardAbort, { once: true });
-  if (signal?.aborted) forwardAbort();
-  const timeout =
-    timeoutMs === undefined || controller.signal.aborted
-      ? undefined
-      : globalThis.setTimeout(() => {
-          controller.abort(
-            new DOMException(
-              `Fingerprint collection timed out after ${timeoutMs}ms.`,
-              'TimeoutError',
-            ),
-          );
-        }, timeoutMs);
-
-  return {
-    signal: controller.signal,
-    dispose(): void {
-      signal?.removeEventListener('abort', forwardAbort);
-      if (timeout !== undefined) globalThis.clearTimeout(timeout);
-    },
-  };
-}
-
 /** Reports whether the current environment is a browser window. */
 export function isBrowserEnvironment(): boolean {
   return (
@@ -318,7 +229,6 @@ async function loadCollector(
       let cancellation: OperationCancellation;
       try {
         optionSnapshot = { ...collectionOptions };
-        validateOperationOptions(optionSnapshot);
         cancellation = createOperationCancellation(
           optionSnapshot.signal,
           optionSnapshot.timeoutMs,
@@ -387,7 +297,6 @@ async function loadCollector(
 export async function load(
   options: LoadOptions = {},
 ): Promise<FingerprintCollector> {
-  validateOperationOptions(options);
   const cancellation = createOperationCancellation(
     options.signal,
     options.timeoutMs,
@@ -403,7 +312,6 @@ export async function collect(
   options: CollectOptions = {},
 ): Promise<FingerprintResult> {
   const { debug, worker, ...collectionOptions } = options;
-  validateOperationOptions(collectionOptions);
   const cancellation = createOperationCancellation(
     collectionOptions.signal,
     collectionOptions.timeoutMs,

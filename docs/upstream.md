@@ -55,6 +55,19 @@ the detector logic recognizable:
   separately, together with focused, fuzzy, and bot signals;
 - debug serialization replaces the upstream report UI.
 
+A few detector expressions that are inert in upstream because of source
+defects are evaluated as upstream evidently intended:
+
+- the headless platform estimate measures real touch support
+  (`ontouchstart` or a positive `maxTouchPoints`); upstream tests
+  `'ontouchstart' in Window`, which is always false for the constructor;
+- the "too much recursion `__proto__`" proxy check assigns a declared proxy;
+  upstream references an undeclared variable, so its check never runs.
+
+Prototype-lie detection inspects the page's own realm, which the navigator,
+screen, and other probes read. The clean phantom iframe supplies only the
+native `Function.prototype.toString` reference used for comparison.
+
 These changes mean `libcreep` is not API- or output-envelope-compatible with
 upstream's `window.Fingerprint` or `window.Creep` objects. Consumers should use
 the documented public result and version fields rather than assuming the

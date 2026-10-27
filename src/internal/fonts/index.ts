@@ -198,7 +198,11 @@ export default async function getFonts() {
 					clearTimeout(timeout)
 					resolve(results)
 				}
-				const timeout = setTimeout(() => finish([]), 1000)
+				// On a slow load, keep the faces that already finished instead of
+				// discarding every FontFace result.
+				const timeout = setTimeout(() => finish(fontFaceList
+					.filter((font) => font.status == 'loaded')
+					.map((value) => ({ status: 'fulfilled', value }))), 1000)
 				void Promise.allSettled(fontFaceList.map((font) => Promise.resolve().then(() => font.load()))).then(
 					finish,
 				)

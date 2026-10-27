@@ -26,7 +26,13 @@ function createMeasurementFragment(
 	template.innerHTML = templateStrings
 		.map((value, index) => `${value}${expressions[index] ?? ''}`)
 		.join('')
-	return document.importNode(template.content, true)
+	const fragment = document.importNode(template.content, true)
+	// Callers remove only their container, so drop the template's surrounding
+	// whitespace text nodes instead of leaving them in the host document.
+	for (const node of Array.from(fragment.childNodes)) {
+		if (node.nodeType === Node.TEXT_NODE && !node.textContent?.trim()) node.remove()
+	}
+	return fragment
 }
 
 export { createMeasurementFragment, replaceElement }

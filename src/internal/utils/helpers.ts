@@ -520,22 +520,9 @@ const getUserAgentRestored = ({ userAgent = '', userAgentData, fontPlatformVersi
 	return userAgentRestored
 }
 
-const createPerformanceLogger = () => {
-	const log: Record<string, string> = {}
-	let total = 0
-	return {
-		logTestResult: ({ test, time = 0 }: { test: string, time?: number, passed?: boolean }) => {
-			total += time
-			const timeString = `${time.toFixed(2)}ms`
-			log[test] = timeString
-			return undefined
-		},
-		getLog: () => ({ ...log }),
-		getTotal: () => total,
-	}
-}
-const performanceLogger = createPerformanceLogger()
-const { logTestResult } = performanceLogger
+// Upstream reports per-detector timing to its page UI. The runtime measures
+// each probe's duration itself, so keep the call sites without retained state.
+const logTestResult = (_result: { test: string, time?: number, passed?: boolean }): void => undefined
 
 type Constructor<T> = abstract new (...args: never[]) => T
 
@@ -707,4 +694,4 @@ const LowerEntropy: Record<string, boolean> = {
 	WEBGL: false,
 }
 
-export { IS_BLINK, IS_GECKO, IS_WEBKIT, JS_ENGINE, LIKE_BRAVE, LIKE_BRAVE_RESISTANCE, ENGINE_IDENTIFIER, braveBrowser, getBraveMode, getBraveUnprotectedParameters, getOS, getReportedPlatform, USER_AGENT_OS, PLATFORM_OS, decryptUserAgent, getUserAgentPlatform, computeWindowsRelease, attemptWindows11UserAgent, isUAPostReduction, getUserAgentRestored, logTestResult, performanceLogger, getPromiseRaceFulfilled, queueEvent, queueTask, createTimer, formatEmojiSet, EMOJIS, CSS_FONT_FAMILY, hashSlice, Analysis, LowerEntropy, getGpuBrand }
+export { IS_BLINK, IS_GECKO, IS_WEBKIT, JS_ENGINE, LIKE_BRAVE, LIKE_BRAVE_RESISTANCE, ENGINE_IDENTIFIER, braveBrowser, getBraveMode, getBraveUnprotectedParameters, getOS, getReportedPlatform, USER_AGENT_OS, PLATFORM_OS, decryptUserAgent, getUserAgentPlatform, computeWindowsRelease, attemptWindows11UserAgent, isUAPostReduction, getUserAgentRestored, logTestResult, getPromiseRaceFulfilled, queueEvent, queueTask, createTimer, formatEmojiSet, EMOJIS, CSS_FONT_FAMILY, hashSlice, Analysis, LowerEntropy, getGpuBrand }

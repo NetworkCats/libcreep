@@ -3,6 +3,9 @@ import { lieProps, PHANTOM_DARKNESS, documentLie } from '../lies'
 import { sendToTrash } from '../trash'
 
 import { createTimer, queueEvent, LIKE_BRAVE, CSS_FONT_FAMILY, EMOJIS, logTestResult, IS_WEBKIT, IS_BLINK, Analysis, LowerEntropy, IS_GECKO } from '../utils/helpers'
+
+const CANVAS_FONT_FAMILY = CSS_FONT_FAMILY.replace(/!important/gm, '')
+
 // inspired by https://arkenfox.github.io/TZP/tests/canvasnoise.html
 export const getPixelMods = () => {
 	const pattern1: string[] = []
@@ -390,7 +393,7 @@ export default async function getCanvas2d() {
 
 		// TextMetrics: get emoji set and system
 		await queueEvent(timer)
-		context.font = `10px ${CSS_FONT_FAMILY.replace(/!important/gm, '')}`
+		context.font = `10px ${CANVAS_FONT_FAMILY}`
 		const pattern = new Set<string>()
 		const emojiSet = EMOJIS.reduce((emojiSet, emoji) => {
 			const {
@@ -443,20 +446,18 @@ export default async function getCanvas2d() {
 		const paintCpuURI = canvasCPU.toDataURL()
 
 		// Text
-		context.restore()
 		context.clearRect(0, 0, canvas.width, canvas.height)
 		canvas.width = 50
 		canvas.height = 50
-		context.font = `50px ${CSS_FONT_FAMILY.replace(/!important/gm, '')}`
+		context.font = `50px ${CANVAS_FONT_FAMILY}`
 		context.fillText('A', 7, 37)
 		const textURI = canvas.toDataURL()
 
 		// Emoji
-		context.restore()
 		context.clearRect(0, 0, canvas.width, canvas.height)
 		canvas.width = 50
 		canvas.height = 50
-		context.font = `35px ${CSS_FONT_FAMILY.replace(/!important/gm, '')}`
+		context.font = `35px ${CANVAS_FONT_FAMILY}`
 		context.fillText('👾', 0, 37)
 		const emojiURI = canvas.toDataURL()
 

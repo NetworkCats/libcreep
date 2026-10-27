@@ -16,11 +16,6 @@ import {
 } from '../utils/helpers'
 import type { WorkerStrategy } from '../../types'
 
-export const Scope = {
-	WORKER: 0,
-	WINDOW: 1,
-} as const
-
 interface UserAgentBrand {
 	brand: string
 	version: string
@@ -79,17 +74,19 @@ interface WorkerScopeData extends Record<string, unknown> {
 	webglVendor?: string
 }
 
-export let WORKER_TYPE = ''
-export let WORKER_NAME = ''
+const getAbortReason = (signal?: AbortSignal) => (
+	signal?.reason ?? new DOMException('Worker detection was aborted.', 'AbortError')
+)
+
+const ask = <T>(fn: () => T): T | undefined => {
+	try {
+		return fn()
+	} catch {
+		return
+	}
+}
 
 export async function spawnWorker() {
-	const ask = <T>(fn: () => T): T | undefined => {
-		try {
-			return fn()
-		} catch {
-			return
-		}
-	}
 
 	function getWorkerPrototypeLies(scope: Window & typeof globalThis) {
 		const lieDetector = createLieDetector(scope)
@@ -166,13 +163,20 @@ export async function spawnWorker() {
 			const canvasOffscreenWebgl = new OffscreenCanvas(256, 256)
 			const contextWebgl = canvasOffscreenWebgl.getContext('webgl')
 			if (!contextWebgl) return undefined
-			const rendererInfo = contextWebgl.getExtension('WEBGL_debug_renderer_info')
-			if (!rendererInfo) return undefined
-			const vendor = contextWebgl.getParameter(rendererInfo.UNMASKED_VENDOR_WEBGL)
-			const renderer = contextWebgl.getParameter(rendererInfo.UNMASKED_RENDERER_WEBGL)
-			return {
-				webglVendor: typeof vendor == 'string' ? vendor : undefined,
-				webglRenderer: typeof renderer == 'string' ? renderer : undefined,
+			try {
+				const rendererInfo = contextWebgl.getExtension('WEBGL_debug_renderer_info')
+				if (!rendererInfo) return undefined
+				const vendor = contextWebgl.getParameter(rendererInfo.UNMASKED_VENDOR_WEBGL)
+				const renderer = contextWebgl.getParameter(rendererInfo.UNMASKED_RENDERER_WEBGL)
+				return {
+					webglVendor: typeof vendor == 'string' ? vendor : undefined,
+					webglRenderer: typeof renderer == 'string' ? renderer : undefined,
+				}
+			} finally {
+				// A shared worker outlives each collection; release its context.
+				try {
+					contextWebgl.getExtension('WEBGL_lose_context')?.loseContext()
+				} catch {}
 			}
 		})
 
@@ -296,7 +300,9 @@ export async function spawnWorker() {
 	// Compute and communicate from worker scope
 	const onEvent = (eventType: string, listener: EventListener) => globalThis.addEventListener(eventType, listener)
 	const send = (source: unknown) => {
-		return getWorkerData().then((data) => {
+		// Reply with null on failure so the window falls back immediately
+		// instead of waiting for its give-up timeout.
+		return getWorkerData().catch(() => null).then((data) => {
 			if (source == null || (typeof source != 'object' && typeof source != 'function')) return
 			const postMessage = Reflect.get(source, 'postMessage')
 			if (typeof postMessage == 'function') Reflect.apply(postMessage, source, [data])
@@ -319,8 +325,6 @@ export async function spawnWorker() {
 			}) as EventListener)
 		else if (typeof self.postMessage == 'function') void send(self) // DedicatedWorkerGlobalScope
 	}
-
-	return IS_WORKER_SCOPE ? Scope.WORKER : Scope.WINDOW
 }
 
 export default async function getBestWorkerScope(
@@ -333,17 +337,9 @@ export default async function getBestWorkerScope(
 		await queueEvent(timer)
 		const throwIfAborted = () => {
 			if (!signal?.aborted) return
-			throw signal.reason ?? new DOMException('Worker detection was aborted.', 'AbortError')
+			throw getAbortReason(signal)
 		}
 		throwIfAborted()
-
-		const ask = <T>(fn: () => T): T | undefined => {
-			try {
-				return fn()
-			} catch {
-				return
-			}
-		}
 
 		const hasMethod = (value: unknown, name: PropertyKey): boolean => {
 			try {
@@ -396,7 +392,7 @@ export default async function getBestWorkerScope(
 				const abort = () =>
 					finish(
 						undefined,
-						signal?.reason ?? new DOMException('Worker detection was aborted.', 'AbortError'),
+						getAbortReason(signal),
 						true,
 					)
 				const giveUpOnWorker = setTimeout(() => finish(null), 3000)
@@ -438,7 +434,7 @@ export default async function getBestWorkerScope(
 				const abort = () =>
 					finish(
 						undefined,
-						signal?.reason ?? new DOMException('Worker detection was aborted.', 'AbortError'),
+						getAbortReason(signal),
 						true,
 					)
 				const giveUpOnWorker = setTimeout(() => finish(null), 3000)
@@ -481,7 +477,8 @@ export default async function getBestWorkerScope(
 						void Promise.resolve(cleanupTarget.unregister()).catch(() => undefined)
 					} catch {}
 				}
-				const expectedScriptURL = new URL(scriptSource, location.href).href
+				// register() resolves relative URLs against the document base URL.
+				const expectedScriptURL = new URL(scriptSource, globalThis.document?.baseURI ?? location.href).href
 				const onMessage = (event: MessageEvent<WorkerScopeData>) => {
 					const sourceScriptURL = event.source && Reflect.get(event.source, 'scriptURL')
 					if (sourceScriptURL != expectedScriptURL) return
@@ -533,7 +530,7 @@ export default async function getBestWorkerScope(
 				const abort = () =>
 					finish(
 						undefined,
-						signal?.reason ?? new DOMException('Worker detection was aborted.', 'AbortError'),
+						getAbortReason(signal),
 						true,
 					)
 				const giveUpOnWorker = setTimeout(() => finish(null), 4000)
@@ -545,7 +542,7 @@ export default async function getBestWorkerScope(
 						`./__libcreep-${Date.now()}-${Math.random().toString(36).slice(2)}/`,
 						expectedScriptURL,
 					).href
-					registrationRequest = navigator.serviceWorker.register(scriptSource, {
+					registrationRequest = navigator.serviceWorker.register(expectedScriptURL, {
 						type: 'module',
 						scope,
 					})
@@ -580,13 +577,6 @@ export default async function getBestWorkerScope(
 		let workerScope: WorkerScopeData | null = null
 		for (const workerType of workerOrder) {
 			throwIfAborted()
-			WORKER_TYPE = workerType
-			WORKER_NAME =
-				workerType == 'service'
-					? 'ServiceWorkerGlobalScope'
-					: workerType == 'shared'
-						? 'SharedWorkerGlobalScope'
-						: 'DedicatedWorkerGlobalScope'
 			const getWorker =
 				workerType == 'service'
 					? getServiceWorker
@@ -737,7 +727,7 @@ export default async function getBestWorkerScope(
 
 		logTestResult({
 			time: timer.stop(),
-			test: `${WORKER_TYPE} worker`,
+			test: 'worker',
 			passed: true,
 		})
 		return {
@@ -747,7 +737,7 @@ export default async function getBestWorkerScope(
 		}
 	} catch (error) {
 		if (signal?.aborted) {
-			throw signal.reason ?? new DOMException('Worker detection was aborted.', 'AbortError')
+			throw getAbortReason(signal)
 		}
 		logTestResult({ test: 'worker', passed: false })
 		captureError(error, 'workers failed or blocked by client')

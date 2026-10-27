@@ -23,7 +23,6 @@ export default function getWindowFeatures() {
 				if (index != -1) {
 					keys = keys.slice(0, index).concat(keys.slice(index + 1))
 				}
-				return keys
 			})
 		}
 
